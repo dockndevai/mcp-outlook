@@ -1,0 +1,65 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dockndevai/mcp-outlook",
+  "description": "Read, search, draft, send and organize Microsoft Outlook mail via Microsoft Graph, safe by default.",
+  "repository": {
+    "url": "https://github.com/dockndevai/mcp-outlook",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@dockndevai/mcp-outlook",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "OUTLOOK_CLIENT_ID",
+          "description": "Entra (Azure AD) app (client) id. For browser sign-in, register a public client with redirect URI http://localhost.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OUTLOOK_TENANT_ID",
+          "description": "Directory tenant: a tenant id, or common | organizations | consumers (default common).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OUTLOOK_CLIENT_SECRET",
+          "description": "App secret for app-only (client-credentials) auth. Omit to use interactive browser sign-in.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "OUTLOOK_TOKEN",
+          "description": "A pre-obtained Microsoft Graph bearer token (alternative to browser or app-only auth).",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "OUTLOOK_USER",
+          "description": "Target mailbox (user id or UPN) for app-only auth. Omit to use the signed-in user's mailbox (/me).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OUTLOOK_MODE",
+          "description": "Access mode: read-only | read-write | admin. Starts read-only; writes need read-write.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OUTLOOK_ALLOW_SEND",
+          "description": "Set true to permit sending mail (send/reply/forward). Off by default.",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

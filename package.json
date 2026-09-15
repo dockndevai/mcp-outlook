@@ -1,0 +1,58 @@
+{
+  "name": "@dockndevai/mcp-outlook",
+  "mcpName": "io.github.dockndevai/mcp-outlook",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server for Microsoft Outlook mail (Microsoft Graph) — read, search, draft, send, reply, forward and organize email, with browser sign-in and safe-by-default access modes and guards.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dockndevai/mcp-outlook.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dockndevai/mcp-outlook/issues"
+  },
+  "homepage": "https://dockndevai.github.io/",
+  "bin": {
+    "mcp-outlook": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "outlook",
+    "microsoft-graph",
+    "email",
+    "office365",
+    "microsoft-365",
+    "mail",
+    "exchange",
+    "llm",
+    "ai"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
