@@ -16,7 +16,7 @@ export function buildServer(config: AppConfig): { server: McpServer; client: Gra
   const policy = new SecurityPolicy(config.security);
   const client = new GraphClient(config.connection);
 
-  const server = new McpServer({ name: "outlook", version: "0.1.0" });
+  const server = new McpServer({ name: "outlook", version: "0.2.0" });
   const ctx: ToolContext = { client, policy, confirm: makeConfirmer(server) };
 
   const enabled: string[] = [];

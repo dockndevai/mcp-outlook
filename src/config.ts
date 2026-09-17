@@ -30,6 +30,7 @@ const DEFAULT_SCOPES = [
   "Mail.ReadWrite",
   "Mail.Send",
   "MailboxSettings.Read",
+  "Files.ReadWrite",
 ];
 
 export interface GraphAuth {

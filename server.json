@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.dockndevai/mcp-outlook",
-  "description": "Read, search, draft, send and organize Microsoft Outlook mail via Microsoft Graph, safe by default.",
+  "description": "Read, search, draft, send and organize Outlook mail and manage OneDrive files via Microsoft Graph, safe by default.",
   "repository": {
     "url": "https://github.com/dockndevai/mcp-outlook",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@dockndevai/mcp-outlook",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       },

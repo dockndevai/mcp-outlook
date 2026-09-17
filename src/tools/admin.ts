@@ -31,4 +31,25 @@ export const adminTools: ToolDef[] = [
       return jsonResult({ deleted: id, note: "Moved to Deleted Items (recoverable)." });
     },
   },
+  {
+    name: "delete_drive_item",
+    capability: "admin",
+    destructive: true,
+    config: {
+      title: "Delete a OneDrive item",
+      description:
+        "Delete a OneDrive file or folder by id. It goes to the OneDrive recycle bin (recoverable), not a permanent " +
+        "purge. Requires admin mode and OUTLOOK_ALLOW_DELETE=true, and prompts for human confirmation.",
+      inputSchema: { item_id: z.string().min(1).describe("Item id (from list_drive_items or search_drive_files).") },
+    },
+    handler: async (args, { client, policy, confirm }) => {
+      const id = args.item_id as string;
+      const { dryRun } = policy.guard({ tool: "delete_drive_item", capability: "admin", destructive: true });
+      if (dryRun) return textResult(`[dry-run] Would delete OneDrive item ${id} (to recycle bin).`);
+      const ok = await confirm.confirm({ action: "delete OneDrive item", target: id });
+      if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
+      await client.deleteDriveItem(id);
+      return jsonResult({ deleted: id, note: "Moved to the OneDrive recycle bin (recoverable)." });
+    },
+  },
 ];

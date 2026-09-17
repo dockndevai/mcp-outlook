@@ -4,7 +4,7 @@
 [![CI](https://github.com/dockndevai/mcp-outlook/actions/workflows/ci.yml/badge.svg)](https://github.com/dockndevai/mcp-outlook/actions/workflows/ci.yml)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
-A **safe-by-default** [Model Context Protocol](https://modelcontextprotocol.io) server for **Microsoft Outlook** mail, over [Microsoft Graph](https://learn.microsoft.com/graph/overview). It lets an agent read and operate a mailbox — list folders and messages, full-text **search**, read bodies and attachment metadata, list contacts, and (in higher modes) create drafts, **send / reply / forward**, mark read, move messages, and delete.
+A **safe-by-default** [Model Context Protocol](https://modelcontextprotocol.io) server for **Microsoft Outlook** mail, over [Microsoft Graph](https://learn.microsoft.com/graph/overview). It lets an agent read and operate a mailbox — list folders and messages, full-text **search**, read bodies and attachment metadata, list contacts, and (in higher modes) create drafts, **send / reply / forward**, mark read, move messages, and delete. It also manages **OneDrive files** — browse, search, download, upload, create folders, move/rename, and delete.
 
 **Browser sign-in:** on first run it opens your browser to the Microsoft sign-in page, then caches the token and refreshes it silently — the server never sees your password.
 
@@ -29,6 +29,12 @@ The server starts **read-only** (see [Safe by default](#safe-by-default)); highe
 | `mark_read` | mark read / unread (reversible) | read-write |
 | `move_message` | move to another folder (reversible) | read-write |
 | `delete_message` | delete (to Deleted Items) | admin + `OUTLOOK_ALLOW_DELETE` |
+| `list_drive_items` / `get_drive_item` | browse OneDrive files & folders | read-only |
+| `search_drive_files` | search OneDrive | read-only |
+| `download_drive_file` | read a OneDrive file's text | read-only |
+| `upload_drive_file` | create/overwrite a OneDrive file | read-write |
+| `create_drive_folder` / `move_drive_item` | create folder / move-rename | read-write |
+| `delete_drive_item` | delete a OneDrive item (→ recycle bin) | admin + `OUTLOOK_ALLOW_DELETE` |
 
 ## Install
 

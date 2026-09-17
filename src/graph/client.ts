@@ -42,6 +42,16 @@ export interface MailFolderRef {
   childFolderCount?: number;
 }
 
+export interface DriveItemRef {
+  id: string;
+  name?: string;
+  isFolder: boolean;
+  size?: number;
+  childCount?: number;
+  lastModified?: string;
+  webUrl?: string;
+}
+
 export interface AttachmentMeta {
   id: string;
   name?: string;
@@ -295,5 +305,101 @@ export class GraphClient {
   deleteMessage(id: string) {
     // Graph DELETE on a message moves it to Deleted Items (recoverable), which is the safe default.
     return this.request<void>(this.mailbox(`/messages/${encodeURIComponent(id)}`), { method: "DELETE" });
+  }
+
+  // ===== OneDrive files =====
+
+  /** Address a drive item by its id, or by a path relative to the drive root ("/Documents/x.txt"). */
+  private driveRef(ref: { id?: string; path?: string }): string {
+    if (ref.id) return `/drive/items/${encodeURIComponent(ref.id)}`;
+    const rel = (ref.path ?? "").replace(/^\/+/, "");
+    if (!rel) return "/drive/root";
+    return `/drive/root:/${rel.split("/").map(encodeURIComponent).join("/")}:`;
+  }
+
+  private summarizeDriveItem(i: Record<string, unknown>): DriveItemRef {
+    const folder = i.folder as { childCount?: number } | undefined;
+    return {
+      id: i.id as string,
+      name: i.name as string | undefined,
+      isFolder: Boolean(folder),
+      size: i.size as number | undefined,
+      childCount: folder?.childCount,
+      lastModified: (i.lastModifiedDateTime as string) ?? undefined,
+      webUrl: i.webUrl as string | undefined,
+    };
+  }
+
+  async listDriveItems(ref: { id?: string; path?: string }): Promise<DriveItemRef[]> {
+    const seg = this.driveRef(ref);
+    const q = "$select=id,name,size,folder,file,lastModifiedDateTime,webUrl&$top=200";
+    const data = await this.request<{ value: Record<string, unknown>[] }>(this.mailbox(`${seg}/children?${q}`));
+    return (data.value ?? []).map((i) => this.summarizeDriveItem(i));
+  }
+
+  async getDriveItem(ref: { id?: string; path?: string }): Promise<DriveItemRef> {
+    const i = await this.request<Record<string, unknown>>(this.mailbox(this.driveRef(ref)));
+    return this.summarizeDriveItem(i);
+  }
+
+  async searchDrive(query: string, top: number): Promise<DriveItemRef[]> {
+    const data = await this.request<{ value: Record<string, unknown>[] }>(
+      this.mailbox(`/drive/root/search(q='${encodeURIComponent(query.replace(/'/g, "''"))}')?$top=${top}`),
+    );
+    return (data.value ?? []).map((i) => this.summarizeDriveItem(i));
+  }
+
+  /** Download a file's content as text (capped). Binary files come back as best-effort UTF-8. */
+  async downloadFile(ref: { id?: string; path?: string }, maxBytes: number): Promise<{ bytes: number; truncated: boolean; content: string }> {
+    const token = await this.tokens.getToken();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(`${this.base}${this.mailbox(this.driveRef(ref))}/content`, {
+        signal: controller.signal,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new GraphError(res.status, res.statusText);
+      const buf = Buffer.from(await res.arrayBuffer());
+      return { bytes: buf.length, truncated: buf.length > maxBytes, content: buf.subarray(0, maxBytes).toString("utf8") };
+    } catch (err) {
+      if (err instanceof GraphError) throw err;
+      if (err instanceof Error && err.name === "AbortError") throw new GraphError(504, "Download timed out.");
+      throw new GraphError(0, err instanceof Error ? err.message : String(err));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Create or overwrite a small text file at a path (PUT simple upload, ≤4 MB). */
+  uploadFile(path: string, content: string) {
+    return this.request<Record<string, unknown>>(this.mailbox(`${this.driveRef({ path })}/content`), {
+      method: "PUT",
+      body: content,
+      headers: { "Content-Type": "text/plain" },
+    });
+  }
+
+  createFolder(parent: { id?: string; path?: string }, name: string) {
+    return this.request<Record<string, unknown>>(this.mailbox(`${this.driveRef(parent)}/children`), {
+      method: "POST",
+      body: JSON.stringify({ name, folder: {}, "@microsoft.graph.conflictBehavior": "rename" }),
+    });
+  }
+
+  /** Move and/or rename an item. Pass a new parent folder id and/or a new name. */
+  moveDriveItem(id: string, opts: { newParentId?: string; newName?: string }) {
+    const body: Record<string, unknown> = {};
+    if (opts.newParentId) body.parentReference = { id: opts.newParentId };
+    if (opts.newName) body.name = opts.newName;
+    return this.request<Record<string, unknown>>(this.mailbox(`/drive/items/${encodeURIComponent(id)}`), {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Delete a drive item (moves it to the OneDrive recycle bin — recoverable). */
+  deleteDriveItem(id: string) {
+    return this.request<void>(this.mailbox(`/drive/items/${encodeURIComponent(id)}`), { method: "DELETE" });
   }
 }

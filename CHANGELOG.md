@@ -4,7 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-09-15
+## [0.2.0] - 2026-09-17
+
+### Added
+- **OneDrive file management** (Microsoft Graph Files API), 8 new tools: `list_drive_items`,
+  `get_drive_item`, `search_drive_files`, `download_drive_file` (read); `upload_drive_file`,
+  `create_drive_folder`, `move_drive_item` (read-write); and `delete_drive_item` (admin +
+  `OUTLOOK_ALLOW_DELETE`, → recycle bin, with human confirmation). Items are addressed by a path
+  relative to the drive root or by item id. The interactive login now also requests the
+  `Files.ReadWrite` scope. 22 tools total.
 
 ### Added
 - Initial release: a safe-by-default MCP server for Microsoft Outlook mail over Microsoft Graph.

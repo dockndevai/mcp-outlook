@@ -132,4 +132,78 @@ export const readTools: ToolDef[] = [
       return jsonResult(await client.listContacts(a.top as number | undefined));
     },
   },
+
+  // ===== OneDrive files =====
+  {
+    name: "list_drive_items",
+    capability: "read",
+    config: {
+      title: "List OneDrive items",
+      description:
+        "List the files and folders in a OneDrive folder. Give a `path` relative to the drive root (e.g. " +
+        '"/Documents"), or an `item_id` from a previous result. Omit both for the root. Returns id, name, ' +
+        "isFolder, size, childCount, lastModified, webUrl.",
+      inputSchema: {
+        path: z.string().optional().describe('Folder path from the drive root, e.g. "/Documents/Reports". Omit for root.'),
+        item_id: z.string().optional().describe("Folder item id (from a previous list). Alternative to path."),
+      },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "list_drive_items", capability: "read" });
+      return jsonResult(await client.listDriveItems({ path: a.path as string | undefined, id: a.item_id as string | undefined }));
+    },
+  },
+  {
+    name: "get_drive_item",
+    capability: "read",
+    config: {
+      title: "Get OneDrive item",
+      description: "Fetch metadata for a single OneDrive file or folder by `path` or `item_id`.",
+      inputSchema: {
+        path: z.string().optional().describe("Item path from the drive root."),
+        item_id: z.string().optional().describe("Item id (from list_drive_items). Alternative to path."),
+      },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "get_drive_item", capability: "read" });
+      return jsonResult(await client.getDriveItem({ path: a.path as string | undefined, id: a.item_id as string | undefined }));
+    },
+  },
+  {
+    name: "search_drive_files",
+    capability: "read",
+    config: {
+      title: "Search OneDrive",
+      description: "Search across OneDrive for files and folders matching a query (name/content).",
+      inputSchema: {
+        query: z.string().min(1).describe("Search text."),
+        top: z.number().int().min(1).max(200).optional().describe("Maximum results (capped by OUTLOOK_MAX_RESULTS)"),
+      },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "search_drive_files", capability: "read" });
+      const top = Math.min(client.maxResults, (a.top as number) ?? client.maxResults);
+      return jsonResult(await client.searchDrive(a.query as string, top));
+    },
+  },
+  {
+    name: "download_drive_file",
+    capability: "read",
+    config: {
+      title: "Download a OneDrive file",
+      description:
+        "Download a OneDrive file's contents as text (capped at ~1 MB). Best for text/markdown/JSON/CSV; binary " +
+        "files come back as best-effort UTF-8, so prefer webUrl for those. Give `path` or `item_id`.",
+      inputSchema: {
+        path: z.string().optional().describe("File path from the drive root, e.g. /Documents/notes.md."),
+        item_id: z.string().optional().describe("File item id (from list_drive_items). Alternative to path."),
+      },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "download_drive_file", capability: "read" });
+      return jsonResult(
+        await client.downloadFile({ path: a.path as string | undefined, id: a.item_id as string | undefined }, 1_000_000),
+      );
+    },
+  },
 ];

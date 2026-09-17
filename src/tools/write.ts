@@ -192,4 +192,75 @@ export const writeTools: ToolDef[] = [
       return jsonResult(await client.moveMessage(id, destination));
     },
   },
+
+  // ===== OneDrive files =====
+  {
+    name: "upload_drive_file",
+    capability: "write",
+    config: {
+      title: "Upload / write a OneDrive file",
+      description:
+        "Create or overwrite a text file in OneDrive at the given path (≤4 MB). Parent folders in the path are " +
+        "created as needed. Reversible-ish: an overwritten file's previous version is kept in OneDrive version history.",
+      inputSchema: {
+        path: z.string().min(1).describe('File path from the drive root, e.g. "/Documents/notes.md".'),
+        content: z.string().describe("Full UTF-8 text contents to write."),
+      },
+    },
+    handler: async (args, { client, policy }) => {
+      const path = args.path as string;
+      const { dryRun } = policy.guard({ tool: "upload_drive_file", capability: "write" });
+      if (dryRun) return textResult(`[dry-run] Would write OneDrive file ${path}.`);
+      return jsonResult(await client.uploadFile(path, args.content as string));
+    },
+  },
+  {
+    name: "create_drive_folder",
+    capability: "write",
+    config: {
+      title: "Create a OneDrive folder",
+      description: "Create a new folder inside a OneDrive folder (by parent `path` or `item_id`; omit both for the root).",
+      inputSchema: {
+        name: z.string().min(1).describe("New folder name."),
+        parent_path: z.string().optional().describe("Parent folder path from the drive root. Omit for root."),
+        parent_id: z.string().optional().describe("Parent folder item id. Alternative to parent_path."),
+      },
+    },
+    handler: async (args, { client, policy }) => {
+      const { dryRun } = policy.guard({ tool: "create_drive_folder", capability: "write" });
+      if (dryRun) return textResult(`[dry-run] Would create folder '${args.name as string}'.`);
+      return jsonResult(
+        await client.createFolder(
+          { path: args.parent_path as string | undefined, id: args.parent_id as string | undefined },
+          args.name as string,
+        ),
+      );
+    },
+  },
+  {
+    name: "move_drive_item",
+    capability: "write",
+    config: {
+      title: "Move / rename a OneDrive item",
+      description:
+        "Move a OneDrive file or folder to another folder and/or rename it. Give the item id, and a new parent " +
+        "folder id and/or a new name. Reversible.",
+      inputSchema: {
+        item_id: z.string().min(1).describe("Item id to move/rename (from list_drive_items)."),
+        new_parent_id: z.string().optional().describe("Destination folder item id (to move it)."),
+        new_name: z.string().optional().describe("New name (to rename it)."),
+      },
+    },
+    handler: async (args, { client, policy }) => {
+      const id = args.item_id as string;
+      const { dryRun } = policy.guard({ tool: "move_drive_item", capability: "write" });
+      if (dryRun) return textResult(`[dry-run] Would move/rename item ${id}.`);
+      return jsonResult(
+        await client.moveDriveItem(id, {
+          newParentId: args.new_parent_id as string | undefined,
+          newName: args.new_name as string | undefined,
+        }),
+      );
+    },
+  },
 ];
