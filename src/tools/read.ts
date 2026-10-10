@@ -132,6 +132,24 @@ export const readTools: ToolDef[] = [
       return jsonResult(await client.listContacts(a.top as number | undefined));
     },
   },
+  {
+    name: "search_contacts",
+    capability: "read",
+    config: {
+      title: "Search contacts",
+      description:
+        "Search the mailbox's personal contacts by display name or email address using Microsoft Graph $search. " +
+        'Example queries: "alice" or "alice@contoso.com". Returns display name, email addresses, and company.',
+      inputSchema: {
+        query: z.string().min(1).describe('Search text, e.g. "alice" or "alice@contoso.com"'),
+        top: z.number().int().min(1).max(200).optional().describe("Maximum results (capped by OUTLOOK_MAX_RESULTS)"),
+      },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "search_contacts", capability: "read" });
+      return jsonResult(await client.searchContacts(a.query as string, a.top as number | undefined));
+    },
+  },
 
   // ===== OneDrive files =====
   {

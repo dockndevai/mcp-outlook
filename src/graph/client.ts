@@ -352,6 +352,15 @@ export class GraphClient {
     return data.value ?? [];
   }
 
+  async searchContacts(query: string, top?: number): Promise<Array<Record<string, unknown>>> {
+    const n = Math.min(this.maxResults, top ?? this.maxResults);
+    // $search matches displayName/givenName/surname/emailAddresses and cannot be combined with $orderby.
+    const q = new URLSearchParams({ $top: String(n), $select: "id,displayName,emailAddresses,companyName" });
+    q.set("$search", `"${query.replace(/"/g, '\\"')}"`);
+    const data = await this.request<{ value: Array<Record<string, unknown>> }>(this.mailbox(`/contacts?${q.toString()}`));
+    return data.value ?? [];
+  }
+
   // --- Writes ---
   createDraft(msg: DraftMessage) {
     return this.request<Record<string, unknown>>(this.mailbox("/messages"), {
