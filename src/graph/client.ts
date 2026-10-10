@@ -11,6 +11,12 @@
 import type { OutlookConnection } from "../config.js";
 import { createTokenProvider, type TokenProvider } from "./auth.js";
 
+/** A page of results plus an opaque cursor (Graph's @odata.nextLink) to fetch the next page, if any. */
+export interface Page<T> {
+  items: T[];
+  nextLink?: string;
+}
+
 export class GraphError extends Error {
   constructor(
     readonly status: number,
@@ -307,26 +313,36 @@ export class GraphClient {
   // --- Messages ---
   private selectFields = "id,subject,from,toRecipients,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink";
 
-  async listMessages(opts: { folder?: string; top?: number; unreadOnly?: boolean }): Promise<MessageRef[]> {
-    const top = Math.min(this.maxResults, opts.top ?? this.maxResults);
-    const seg = opts.folder ? `/mailFolders/${encodeURIComponent(opts.folder)}/messages` : "/messages";
-    const q = new URLSearchParams({
-      $top: String(top),
-      $select: this.selectFields,
-      $orderby: "receivedDateTime desc",
-    });
-    if (opts.unreadOnly) q.set("$filter", "isRead eq false");
-    const data = await this.request<{ value: GraphMessage[] }>(this.mailbox(`${seg}?${q.toString()}`));
-    return (data.value ?? []).map(summarizeMessage);
+  async listMessages(opts: { folder?: string; top?: number; unreadOnly?: boolean; cursor?: string }): Promise<Page<MessageRef>> {
+    let data: { value: GraphMessage[]; "@odata.nextLink"?: string };
+    if (opts.cursor) {
+      data = await this.request<{ value: GraphMessage[]; "@odata.nextLink"?: string }>(opts.cursor);
+    } else {
+      const top = Math.min(this.maxResults, opts.top ?? this.maxResults);
+      const seg = opts.folder ? `/mailFolders/${encodeURIComponent(opts.folder)}/messages` : "/messages";
+      const q = new URLSearchParams({
+        $top: String(top),
+        $select: this.selectFields,
+        $orderby: "receivedDateTime desc",
+      });
+      if (opts.unreadOnly) q.set("$filter", "isRead eq false");
+      data = await this.request<{ value: GraphMessage[]; "@odata.nextLink"?: string }>(this.mailbox(`${seg}?${q.toString()}`));
+    }
+    return { items: (data.value ?? []).map(summarizeMessage), nextLink: data["@odata.nextLink"] };
   }
 
-  async searchMessages(query: string, top?: number): Promise<MessageRef[]> {
-    const n = Math.min(this.maxResults, top ?? this.maxResults);
-    // $search must be double-quoted and cannot be combined with $orderby.
-    const q = new URLSearchParams({ $top: String(n), $select: this.selectFields });
-    q.set("$search", `"${query.replace(/"/g, '\\"')}"`);
-    const data = await this.request<{ value: GraphMessage[] }>(this.mailbox(`/messages?${q.toString()}`));
-    return (data.value ?? []).map(summarizeMessage);
+  async searchMessages(query: string, top?: number, cursor?: string): Promise<Page<MessageRef>> {
+    let data: { value: GraphMessage[]; "@odata.nextLink"?: string };
+    if (cursor) {
+      data = await this.request<{ value: GraphMessage[]; "@odata.nextLink"?: string }>(cursor);
+    } else {
+      const n = Math.min(this.maxResults, top ?? this.maxResults);
+      // $search must be double-quoted and cannot be combined with $orderby.
+      const q = new URLSearchParams({ $top: String(n), $select: this.selectFields });
+      q.set("$search", `"${query.replace(/"/g, '\\"')}"`);
+      data = await this.request<{ value: GraphMessage[]; "@odata.nextLink"?: string }>(this.mailbox(`/messages?${q.toString()}`));
+    }
+    return { items: (data.value ?? []).map(summarizeMessage), nextLink: data["@odata.nextLink"] };
   }
 
   async getMessage(id: string): Promise<Record<string, unknown>> {
@@ -344,21 +360,27 @@ export class GraphClient {
   }
 
   // --- Contacts ---
-  async listContacts(top?: number): Promise<Array<Record<string, unknown>>> {
-    const n = Math.min(this.maxResults, top ?? this.maxResults);
-    const data = await this.request<{ value: Array<Record<string, unknown>> }>(
-      this.mailbox(`/contacts?$top=${n}&$select=id,displayName,emailAddresses,companyName`),
-    );
-    return data.value ?? [];
+  async listContacts(top?: number, cursor?: string): Promise<Page<Record<string, unknown>>> {
+    const data = cursor
+      ? await this.request<{ value: Array<Record<string, unknown>>; "@odata.nextLink"?: string }>(cursor)
+      : await this.request<{ value: Array<Record<string, unknown>>; "@odata.nextLink"?: string }>(
+          this.mailbox(`/contacts?$top=${Math.min(this.maxResults, top ?? this.maxResults)}&$select=id,displayName,emailAddresses,companyName`),
+        );
+    return { items: data.value ?? [], nextLink: data["@odata.nextLink"] };
   }
 
-  async searchContacts(query: string, top?: number): Promise<Array<Record<string, unknown>>> {
-    const n = Math.min(this.maxResults, top ?? this.maxResults);
-    // $search matches displayName/givenName/surname/emailAddresses and cannot be combined with $orderby.
-    const q = new URLSearchParams({ $top: String(n), $select: "id,displayName,emailAddresses,companyName" });
-    q.set("$search", `"${query.replace(/"/g, '\\"')}"`);
-    const data = await this.request<{ value: Array<Record<string, unknown>> }>(this.mailbox(`/contacts?${q.toString()}`));
-    return data.value ?? [];
+  async searchContacts(query: string, top?: number, cursor?: string): Promise<Page<Record<string, unknown>>> {
+    let data: { value: Array<Record<string, unknown>>; "@odata.nextLink"?: string };
+    if (cursor) {
+      data = await this.request<{ value: Array<Record<string, unknown>>; "@odata.nextLink"?: string }>(cursor);
+    } else {
+      const n = Math.min(this.maxResults, top ?? this.maxResults);
+      // $search matches displayName/givenName/surname/emailAddresses and cannot be combined with $orderby.
+      const q = new URLSearchParams({ $top: String(n), $select: "id,displayName,emailAddresses,companyName" });
+      q.set("$search", `"${query.replace(/"/g, '\\"')}"`);
+      data = await this.request<{ value: Array<Record<string, unknown>>; "@odata.nextLink"?: string }>(this.mailbox(`/contacts?${q.toString()}`));
+    }
+    return { items: data.value ?? [], nextLink: data["@odata.nextLink"] };
   }
 
   // --- Writes ---
@@ -428,7 +450,17 @@ export class GraphClient {
     }));
   }
 
-  async listEvents(opts: { start?: string; end?: string; calendarId?: string; top?: number }): Promise<EventRef[]> {
+  async listEvents(opts: {
+    start?: string;
+    end?: string;
+    calendarId?: string;
+    top?: number;
+    cursor?: string;
+  }): Promise<Page<EventRef>> {
+    if (opts.cursor) {
+      const data = await this.request<{ value: GraphEvent[]; "@odata.nextLink"?: string }>(opts.cursor);
+      return { items: (data.value ?? []).map(summarizeEvent), nextLink: data["@odata.nextLink"] };
+    }
     const top = Math.min(this.maxResults, opts.top ?? this.maxResults);
     const calSeg = opts.calendarId ? `/calendars/${encodeURIComponent(opts.calendarId)}` : "";
     // With a window, calendarView expands recurrences; otherwise list raw events.
@@ -440,12 +472,14 @@ export class GraphClient {
         $select: this.eventSelect,
         $orderby: "start/dateTime",
       });
-      const data = await this.request<{ value: GraphEvent[] }>(this.mailbox(`${calSeg}/calendarView?${q.toString()}`));
-      return (data.value ?? []).map(summarizeEvent);
+      const data = await this.request<{ value: GraphEvent[]; "@odata.nextLink"?: string }>(
+        this.mailbox(`${calSeg}/calendarView?${q.toString()}`),
+      );
+      return { items: (data.value ?? []).map(summarizeEvent), nextLink: data["@odata.nextLink"] };
     }
     const q = new URLSearchParams({ $top: String(top), $select: this.eventSelect, $orderby: "start/dateTime" });
-    const data = await this.request<{ value: GraphEvent[] }>(this.mailbox(`${calSeg}/events?${q.toString()}`));
-    return (data.value ?? []).map(summarizeEvent);
+    const data = await this.request<{ value: GraphEvent[]; "@odata.nextLink"?: string }>(this.mailbox(`${calSeg}/events?${q.toString()}`));
+    return { items: (data.value ?? []).map(summarizeEvent), nextLink: data["@odata.nextLink"] };
   }
 
   getEvent(id: string): Promise<Record<string, unknown>> {
@@ -528,11 +562,13 @@ export class GraphClient {
     };
   }
 
-  async listDriveItems(ref: { id?: string; path?: string }): Promise<DriveItemRef[]> {
-    const seg = this.driveRef(ref);
-    const q = "$select=id,name,size,folder,file,lastModifiedDateTime,webUrl&$top=200";
-    const data = await this.request<{ value: Record<string, unknown>[] }>(this.mailbox(`${seg}/children?${q}`));
-    return (data.value ?? []).map((i) => this.summarizeDriveItem(i));
+  async listDriveItems(ref: { id?: string; path?: string }, cursor?: string): Promise<Page<DriveItemRef>> {
+    const data = cursor
+      ? await this.request<{ value: Record<string, unknown>[]; "@odata.nextLink"?: string }>(cursor)
+      : await this.request<{ value: Record<string, unknown>[]; "@odata.nextLink"?: string }>(
+          this.mailbox(`${this.driveRef(ref)}/children?$select=id,name,size,folder,file,lastModifiedDateTime,webUrl&$top=200`),
+        );
+    return { items: (data.value ?? []).map((i) => this.summarizeDriveItem(i)), nextLink: data["@odata.nextLink"] };
   }
 
   async getDriveItem(ref: { id?: string; path?: string }): Promise<DriveItemRef> {
@@ -540,11 +576,13 @@ export class GraphClient {
     return this.summarizeDriveItem(i);
   }
 
-  async searchDrive(query: string, top: number): Promise<DriveItemRef[]> {
-    const data = await this.request<{ value: Record<string, unknown>[] }>(
-      this.mailbox(`/drive/root/search(q='${encodeURIComponent(query.replace(/'/g, "''"))}')?$top=${top}`),
-    );
-    return (data.value ?? []).map((i) => this.summarizeDriveItem(i));
+  async searchDrive(query: string, top: number, cursor?: string): Promise<Page<DriveItemRef>> {
+    const data = cursor
+      ? await this.request<{ value: Record<string, unknown>[]; "@odata.nextLink"?: string }>(cursor)
+      : await this.request<{ value: Record<string, unknown>[]; "@odata.nextLink"?: string }>(
+          this.mailbox(`/drive/root/search(q='${encodeURIComponent(query.replace(/'/g, "''"))}')?$top=${top}`),
+        );
+    return { items: (data.value ?? []).map((i) => this.summarizeDriveItem(i)), nextLink: data["@odata.nextLink"] };
   }
 
   /** Download a file's content as text (capped). Binary files come back as best-effort UTF-8. */
