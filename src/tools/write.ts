@@ -263,4 +263,130 @@ export const writeTools: ToolDef[] = [
       );
     },
   },
+
+  // --- Calendar writes (gated by OUTLOOK_ALLOW_SEND, since they notify attendees/organizers) ---
+  {
+    name: "create_event",
+    capability: "write",
+    requiresSend: true,
+    config: {
+      title: "Create a calendar event",
+      description:
+        "Create a calendar event / meeting. If it has attendees, invitations are sent — so it is gated by " +
+        "OUTLOOK_ALLOW_SEND=true and a human confirmation. Times are ISO 8601; set `time_zone` (IANA/Windows) or it " +
+        "defaults to UTC.",
+      inputSchema: {
+        subject: z.string().describe("Event title."),
+        start: z.string().describe("Start, ISO 8601 (e.g. 2026-10-12T15:00:00)."),
+        end: z.string().describe("End, ISO 8601."),
+        time_zone: z.string().optional().describe("Time zone for start/end, e.g. 'UTC' or 'America/New_York'. Default UTC."),
+        body: z.string().optional().describe("Event description / agenda."),
+        html: z.boolean().optional().describe("Treat `body` as HTML instead of plain text."),
+        location: z.string().optional().describe("Location display name."),
+        attendees: z.array(z.string()).optional().describe("Attendee email addresses (invites are sent)."),
+        is_all_day: z.boolean().optional().describe("All-day event (start/end should be at midnight)."),
+        is_online_meeting: z.boolean().optional().describe("Create a Teams online meeting and include the join link."),
+        reminder_minutes_before_start: z.number().int().min(0).max(40320).optional().describe("Reminder lead time in minutes."),
+      },
+    },
+    handler: async (args, { client, policy, confirm }) => {
+      const subject = args.subject as string;
+      const attendees = (args.attendees as string[] | undefined) ?? [];
+      const { dryRun } = policy.guard({ tool: "create_event", capability: "write", requiresSend: true });
+      if (dryRun)
+        return textResult(`[dry-run] Would create "${subject}" ${args.start}–${args.end}${attendees.length ? ` inviting ${attendees.join(", ")}` : ""}.`);
+      const ok = await confirm.confirm({
+        action: "create calendar event",
+        target: subject,
+        details: { when: `${args.start} – ${args.end}`, attendees: attendees.join(", ") || undefined },
+      });
+      if (!ok.approved) return textResult(`Create cancelled — ${ok.reason}.`);
+      return jsonResult(
+        await client.createEvent({
+          subject,
+          start: args.start as string,
+          end: args.end as string,
+          timeZone: args.time_zone as string | undefined,
+          body: args.body as string | undefined,
+          html: args.html as boolean | undefined,
+          location: args.location as string | undefined,
+          attendees,
+          isAllDay: args.is_all_day as boolean | undefined,
+          isOnlineMeeting: args.is_online_meeting as boolean | undefined,
+          reminderMinutesBeforeStart: args.reminder_minutes_before_start as number | undefined,
+        }),
+      );
+    },
+  },
+  {
+    name: "update_event",
+    capability: "write",
+    requiresSend: true,
+    config: {
+      title: "Update a calendar event",
+      description:
+        "Update fields of an existing event (time, subject, body, location, attendees, online-meeting). Attendees are " +
+        "notified of changes, so it is gated by OUTLOOK_ALLOW_SEND=true and a confirmation. Only the fields you pass change.",
+      inputSchema: {
+        id: z.string().min(1).describe("Event id (from list_events)."),
+        subject: z.string().optional().describe("New title."),
+        start: z.string().optional().describe("New start, ISO 8601."),
+        end: z.string().optional().describe("New end, ISO 8601."),
+        time_zone: z.string().optional().describe("Time zone for start/end. Default UTC."),
+        body: z.string().optional().describe("New description."),
+        html: z.boolean().optional().describe("Treat `body` as HTML."),
+        location: z.string().optional().describe("New location."),
+        attendees: z.array(z.string()).optional().describe("Replacement attendee list (emails)."),
+        is_online_meeting: z.boolean().optional().describe("Toggle an online meeting."),
+      },
+    },
+    handler: async (args, { client, policy, confirm }) => {
+      const id = args.id as string;
+      const { dryRun } = policy.guard({ tool: "update_event", capability: "write", requiresSend: true });
+      if (dryRun) return textResult(`[dry-run] Would update event ${id}.`);
+      const ok = await confirm.confirm({ action: "update calendar event", target: id });
+      if (!ok.approved) return textResult(`Update cancelled — ${ok.reason}.`);
+      return jsonResult(
+        await client.updateEvent(id, {
+          subject: args.subject as string | undefined,
+          start: args.start as string | undefined,
+          end: args.end as string | undefined,
+          timeZone: args.time_zone as string | undefined,
+          body: args.body as string | undefined,
+          html: args.html as boolean | undefined,
+          location: args.location as string | undefined,
+          attendees: args.attendees as string[] | undefined,
+          isOnlineMeeting: args.is_online_meeting as boolean | undefined,
+        }),
+      );
+    },
+  },
+  {
+    name: "respond_to_event",
+    capability: "write",
+    requiresSend: true,
+    config: {
+      title: "Respond to a meeting invite",
+      description:
+        "Accept, decline, or tentatively accept a meeting invitation. A response is sent to the organizer, so it is " +
+        "gated by OUTLOOK_ALLOW_SEND=true and a confirmation.",
+      inputSchema: {
+        id: z.string().min(1).describe("Event id (from list_events)."),
+        response: z.enum(["accept", "decline", "tentative"]).describe("Your response."),
+        comment: z.string().optional().describe("Optional note to the organizer."),
+        send_response: z.boolean().optional().describe("Send the response to the organizer (default true)."),
+      },
+    },
+    handler: async (args, { client, policy, confirm }) => {
+      const id = args.id as string;
+      const resp = args.response as "accept" | "decline" | "tentative";
+      const graphResp = resp === "tentative" ? "tentativelyAccept" : resp;
+      const { dryRun } = policy.guard({ tool: "respond_to_event", capability: "write", requiresSend: true });
+      if (dryRun) return textResult(`[dry-run] Would ${resp} event ${id}.`);
+      const ok = await confirm.confirm({ action: `${resp} meeting invite`, target: id });
+      if (!ok.approved) return textResult(`Response cancelled — ${ok.reason}.`);
+      await client.respondToEvent(id, graphResp, (args.comment as string | undefined) ?? "", (args.send_response as boolean | undefined) ?? true);
+      return textResult(`Responded "${resp}" to event ${id}.`);
+    },
+  },
 ];

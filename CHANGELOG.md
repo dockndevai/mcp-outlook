@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-10
+
+### Added
+- **Calendar support (Microsoft Graph).** Nine tools across read/read-write/admin: `list_calendars`,
+  `list_events` (a start/end window expands recurring events via calendarView), `get_event`,
+  `get_free_busy` (availability for one or more people); `create_event`, `update_event`,
+  `respond_to_event` (accept/decline/tentative); and `cancel_event`, `delete_event`.
+- Calendar **writes are gated** the same way as mail: creating/updating/responding notify
+  attendees/organizers, so they need `OUTLOOK_ALLOW_SEND=true` plus a human confirmation; cancelling
+  and deleting need admin mode plus `OUTLOOK_ALLOW_DELETE=true`.
+- Added the `Calendars.ReadWrite` delegated scope to the defaults. **Access is governed by the Microsoft
+  account's granted scopes** — if the token isn't consented for calendar, Graph returns 403; the server's
+  modes/flags are defence in depth on top. Override with `OUTLOOK_SCOPES` to downscope.
+
 ## [0.3.0] - 2026-09-29
 
 ### Added

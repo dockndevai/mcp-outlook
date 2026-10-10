@@ -131,6 +131,101 @@ function buildMessage(m: DraftMessage): Record<string, unknown> {
   };
 }
 
+// --- Calendar ---
+
+export interface CalendarRef {
+  id: string;
+  name?: string;
+  owner?: string;
+  canEdit?: boolean;
+  isDefault?: boolean;
+}
+
+export interface EventRef {
+  id: string;
+  subject?: string;
+  start?: string;
+  end?: string;
+  timeZone?: string;
+  location?: string;
+  organizer?: string;
+  attendees?: string[];
+  isAllDay?: boolean;
+  isCancelled?: boolean;
+  isOnlineMeeting?: boolean;
+  joinUrl?: string;
+  myResponse?: string;
+  webLink?: string;
+}
+
+/** Fields a create/update accepts. Times are ISO 8601; timeZone is an IANA/Windows zone (default UTC). */
+export interface EventInput {
+  subject?: string;
+  start?: string;
+  end?: string;
+  timeZone?: string;
+  body?: string;
+  html?: boolean;
+  location?: string;
+  attendees?: string[];
+  isAllDay?: boolean;
+  isOnlineMeeting?: boolean;
+  reminderMinutesBeforeStart?: number;
+}
+
+type GraphDateTimeTz = { dateTime?: string; timeZone?: string };
+type GraphEvent = {
+  id: string;
+  subject?: string;
+  start?: GraphDateTimeTz;
+  end?: GraphDateTimeTz;
+  location?: { displayName?: string };
+  organizer?: GraphRecipient;
+  attendees?: Array<{ emailAddress?: { address?: string } }>;
+  isAllDay?: boolean;
+  isCancelled?: boolean;
+  isOnlineMeeting?: boolean;
+  onlineMeeting?: { joinUrl?: string } | null;
+  responseStatus?: { response?: string };
+  webLink?: string;
+};
+
+export function summarizeEvent(e: GraphEvent): EventRef {
+  return {
+    id: e.id,
+    subject: e.subject,
+    start: e.start?.dateTime,
+    end: e.end?.dateTime,
+    timeZone: e.start?.timeZone,
+    location: e.location?.displayName,
+    organizer: e.organizer?.emailAddress?.address,
+    attendees: (e.attendees ?? []).map((a) => a.emailAddress?.address).filter((x): x is string => Boolean(x)),
+    isAllDay: e.isAllDay,
+    isCancelled: e.isCancelled,
+    isOnlineMeeting: e.isOnlineMeeting,
+    joinUrl: e.onlineMeeting?.joinUrl,
+    myResponse: e.responseStatus?.response,
+    webLink: e.webLink,
+  };
+}
+
+function buildEvent(ev: EventInput): Record<string, unknown> {
+  const tz = ev.timeZone ?? "UTC";
+  const out: Record<string, unknown> = {};
+  if (ev.subject !== undefined) out.subject = ev.subject;
+  if (ev.body !== undefined) out.body = { contentType: ev.html ? "HTML" : "Text", content: ev.body };
+  if (ev.start !== undefined) out.start = { dateTime: ev.start, timeZone: tz };
+  if (ev.end !== undefined) out.end = { dateTime: ev.end, timeZone: tz };
+  if (ev.location !== undefined) out.location = { displayName: ev.location };
+  if (ev.attendees?.length) {
+    out.attendees = ev.attendees.map((address) => ({ emailAddress: { address }, type: "required" }));
+  }
+  if (ev.isAllDay !== undefined) out.isAllDay = ev.isAllDay;
+  if (ev.isOnlineMeeting !== undefined) out.isOnlineMeeting = ev.isOnlineMeeting;
+  if (ev.reminderMinutesBeforeStart !== undefined) out.reminderMinutesBeforeStart = ev.reminderMinutesBeforeStart;
+  return out;
+}
+
 export class GraphClient {
   private readonly base: string;
   private readonly userPath: string;
@@ -305,6 +400,100 @@ export class GraphClient {
   deleteMessage(id: string) {
     // Graph DELETE on a message moves it to Deleted Items (recoverable), which is the safe default.
     return this.request<void>(this.mailbox(`/messages/${encodeURIComponent(id)}`), { method: "DELETE" });
+  }
+
+  // --- Calendar (reads) ---
+  private eventSelect =
+    "id,subject,start,end,location,organizer,attendees,isAllDay,isCancelled,isOnlineMeeting,onlineMeeting,responseStatus,webLink";
+
+  async listCalendars(): Promise<CalendarRef[]> {
+    const data = await this.request<{ value: Array<Record<string, unknown>> }>(
+      this.mailbox("/calendars?$select=id,name,owner,canEdit,isDefaultCalendar"),
+    );
+    return (data.value ?? []).map((c) => ({
+      id: c.id as string,
+      name: c.name as string | undefined,
+      owner: (c.owner as { address?: string } | undefined)?.address,
+      canEdit: c.canEdit as boolean | undefined,
+      isDefault: c.isDefaultCalendar as boolean | undefined,
+    }));
+  }
+
+  async listEvents(opts: { start?: string; end?: string; calendarId?: string; top?: number }): Promise<EventRef[]> {
+    const top = Math.min(this.maxResults, opts.top ?? this.maxResults);
+    const calSeg = opts.calendarId ? `/calendars/${encodeURIComponent(opts.calendarId)}` : "";
+    // With a window, calendarView expands recurrences; otherwise list raw events.
+    if (opts.start && opts.end) {
+      const q = new URLSearchParams({
+        startDateTime: opts.start,
+        endDateTime: opts.end,
+        $top: String(top),
+        $select: this.eventSelect,
+        $orderby: "start/dateTime",
+      });
+      const data = await this.request<{ value: GraphEvent[] }>(this.mailbox(`${calSeg}/calendarView?${q.toString()}`));
+      return (data.value ?? []).map(summarizeEvent);
+    }
+    const q = new URLSearchParams({ $top: String(top), $select: this.eventSelect, $orderby: "start/dateTime" });
+    const data = await this.request<{ value: GraphEvent[] }>(this.mailbox(`${calSeg}/events?${q.toString()}`));
+    return (data.value ?? []).map(summarizeEvent);
+  }
+
+  getEvent(id: string): Promise<Record<string, unknown>> {
+    const q = new URLSearchParams({ $select: `${this.eventSelect},body,bodyPreview,recurrence,showAs,importance` });
+    return this.request<Record<string, unknown>>(this.mailbox(`/events/${encodeURIComponent(id)}?${q.toString()}`));
+  }
+
+  getSchedule(schedules: string[], start: string, end: string, intervalMinutes = 30): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(this.mailbox("/calendar/getSchedule"), {
+      method: "POST",
+      body: JSON.stringify({
+        schedules,
+        startTime: { dateTime: start, timeZone: "UTC" },
+        endTime: { dateTime: end, timeZone: "UTC" },
+        availabilityViewInterval: intervalMinutes,
+      }),
+    });
+  }
+
+  // --- Calendar (writes) ---
+  createEvent(ev: EventInput): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(this.mailbox("/events"), {
+      method: "POST",
+      body: JSON.stringify(buildEvent(ev)),
+    });
+  }
+
+  updateEvent(id: string, ev: EventInput): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(this.mailbox(`/events/${encodeURIComponent(id)}`), {
+      method: "PATCH",
+      body: JSON.stringify(buildEvent(ev)),
+    });
+  }
+
+  respondToEvent(
+    id: string,
+    response: "accept" | "decline" | "tentativelyAccept",
+    comment = "",
+    sendResponse = true,
+  ): Promise<void> {
+    return this.request<void>(this.mailbox(`/events/${encodeURIComponent(id)}/${response}`), {
+      method: "POST",
+      body: JSON.stringify({ comment, sendResponse }),
+    });
+  }
+
+  cancelEvent(id: string, comment = ""): Promise<void> {
+    // Organizer-only: notifies attendees and cancels the meeting.
+    return this.request<void>(this.mailbox(`/events/${encodeURIComponent(id)}/cancel`), {
+      method: "POST",
+      body: JSON.stringify({ comment }),
+    });
+  }
+
+  deleteEvent(id: string): Promise<void> {
+    // Removes the event; if you organize it, Graph sends cancellations to attendees.
+    return this.request<void>(this.mailbox(`/events/${encodeURIComponent(id)}`), { method: "DELETE" });
   }
 
   // ===== OneDrive files =====

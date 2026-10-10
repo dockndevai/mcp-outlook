@@ -206,4 +206,86 @@ export const readTools: ToolDef[] = [
       );
     },
   },
+
+  // --- Calendar ---
+  {
+    name: "list_calendars",
+    capability: "read",
+    config: {
+      title: "List calendars",
+      description: "List the calendars in the mailbox (id, name, owner, whether you can edit). Needs the Calendars scope.",
+      inputSchema: {},
+    },
+    handler: async (_a, { client, policy }) => {
+      policy.guard({ tool: "list_calendars", capability: "read" });
+      return jsonResult(await client.listCalendars());
+    },
+  },
+  {
+    name: "list_events",
+    capability: "read",
+    config: {
+      title: "List calendar events",
+      description:
+        "List events, newest window first. Give `start` and `end` (ISO 8601) to get a time window with recurring " +
+        "events expanded; omit them to list upcoming/raw events. Optionally scope to one calendar.",
+      inputSchema: {
+        start: z.string().optional().describe("Window start, ISO 8601 (e.g. 2026-10-10T00:00:00Z). Pair with `end`."),
+        end: z.string().optional().describe("Window end, ISO 8601. Pair with `start`."),
+        calendar_id: z.string().optional().describe("Calendar id (from list_calendars). Defaults to the default calendar."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max events (capped by OUTLOOK_MAX_RESULTS)."),
+      },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "list_events", capability: "read" });
+      return jsonResult(
+        await client.listEvents({
+          start: a.start as string | undefined,
+          end: a.end as string | undefined,
+          calendarId: a.calendar_id as string | undefined,
+          top: a.limit as number | undefined,
+        }),
+      );
+    },
+  },
+  {
+    name: "get_event",
+    capability: "read",
+    config: {
+      title: "Get a calendar event",
+      description: "Fetch one event by id, with its full body, attendees, recurrence and online-meeting details.",
+      inputSchema: { id: z.string().min(1).describe("Event id (from list_events).") },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "get_event", capability: "read" });
+      return jsonResult(await client.getEvent(a.id as string));
+    },
+  },
+  {
+    name: "get_free_busy",
+    capability: "read",
+    config: {
+      title: "Get free/busy schedule",
+      description:
+        "Check availability (free/busy) for one or more people over a time window — useful before proposing a " +
+        "meeting time. Returns each address's availability view for the window.",
+      inputSchema: {
+        schedules: z.array(z.string()).min(1).describe("Email addresses to check (your own and/or others)."),
+        start: z.string().describe("Window start, ISO 8601 (UTC)."),
+        end: z.string().describe("Window end, ISO 8601 (UTC)."),
+        interval_minutes: z.number().int().min(5).max(1440).optional().describe("Availability slot size in minutes (default 30)."),
+      },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "get_free_busy", capability: "read" });
+      return jsonResult(
+        await client.getSchedule(
+          a.schedules as string[],
+          a.start as string,
+          a.end as string,
+          (a.interval_minutes as number | undefined) ?? 30,
+        ),
+      );
+    },
+  },
 ];

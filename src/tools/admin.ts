@@ -52,4 +52,52 @@ export const adminTools: ToolDef[] = [
       return jsonResult({ deleted: id, note: "Moved to the OneDrive recycle bin (recoverable)." });
     },
   },
+
+  // --- Calendar (destructive) ---
+  {
+    name: "cancel_event",
+    capability: "admin",
+    destructive: true,
+    config: {
+      title: "Cancel a meeting",
+      description:
+        "Cancel a meeting you organize: a cancellation is sent to all attendees and the event is removed from their " +
+        "calendars. Requires admin mode and OUTLOOK_ALLOW_DELETE=true, and prompts for confirmation. Organizer only — " +
+        "use respond_to_event=decline for meetings you don't own.",
+      inputSchema: {
+        id: z.string().min(1).describe("Event id (from list_events)."),
+        comment: z.string().optional().describe("Optional message included in the cancellation."),
+      },
+    },
+    handler: async (args, { client, policy, confirm }) => {
+      const id = args.id as string;
+      const { dryRun } = policy.guard({ tool: "cancel_event", capability: "admin", destructive: true });
+      if (dryRun) return textResult(`[dry-run] Would cancel meeting ${id} and notify attendees.`);
+      const ok = await confirm.confirm({ action: "cancel meeting", target: id });
+      if (!ok.approved) return textResult(`Cancellation stopped — ${ok.reason}.`);
+      await client.cancelEvent(id, (args.comment as string | undefined) ?? "");
+      return jsonResult({ cancelled: id, note: "Cancellation sent to attendees." });
+    },
+  },
+  {
+    name: "delete_event",
+    capability: "admin",
+    destructive: true,
+    config: {
+      title: "Delete a calendar event",
+      description:
+        "Delete an event from the calendar. If you organize it, Graph sends cancellations to attendees. Requires admin " +
+        "mode and OUTLOOK_ALLOW_DELETE=true, and prompts for confirmation.",
+      inputSchema: { id: z.string().min(1).describe("Event id (from list_events).") },
+    },
+    handler: async (args, { client, policy, confirm }) => {
+      const id = args.id as string;
+      const { dryRun } = policy.guard({ tool: "delete_event", capability: "admin", destructive: true });
+      if (dryRun) return textResult(`[dry-run] Would delete event ${id}.`);
+      const ok = await confirm.confirm({ action: "delete calendar event", target: id });
+      if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
+      await client.deleteEvent(id);
+      return jsonResult({ deleted: id });
+    },
+  },
 ];

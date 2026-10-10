@@ -4,7 +4,7 @@
 [![CI](https://github.com/dockndevai/mcp-outlook/actions/workflows/ci.yml/badge.svg)](https://github.com/dockndevai/mcp-outlook/actions/workflows/ci.yml)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
-A **safe-by-default** [Model Context Protocol](https://modelcontextprotocol.io) server for **Microsoft Outlook** mail, over [Microsoft Graph](https://learn.microsoft.com/graph/overview). It lets an agent read and operate a mailbox — list folders and messages, full-text **search**, read bodies and attachment metadata, list contacts, and (in higher modes) create drafts, **send / reply / forward**, mark read, move messages, and delete. It also manages **OneDrive files** — browse, search, download, upload, create folders, move/rename, and delete.
+A **safe-by-default** [Model Context Protocol](https://modelcontextprotocol.io) server for **Microsoft Outlook** mail, over [Microsoft Graph](https://learn.microsoft.com/graph/overview). It lets an agent read and operate a mailbox — list folders and messages, full-text **search**, read bodies and attachment metadata, list contacts, and (in higher modes) create drafts, **send / reply / forward**, mark read, move messages, and delete. It also manages **OneDrive files** — browse, search, download, upload, create folders, move/rename, and delete — and the **calendar** — list calendars and events, check free/busy, and (gated) create, update, respond to, cancel and delete events.
 
 **Browser sign-in:** on first run it opens your browser to the Microsoft sign-in page, then caches the token and refreshes it silently — the server never sees your password.
 
@@ -35,6 +35,16 @@ The server starts **read-only** (see [Safe by default](#safe-by-default)); highe
 | `upload_drive_file` | create/overwrite a OneDrive file | read-write |
 | `create_drive_folder` / `move_drive_item` | create folder / move-rename | read-write |
 | `delete_drive_item` | delete a OneDrive item (→ recycle bin) | admin + `OUTLOOK_ALLOW_DELETE` |
+| `list_calendars` / `list_events` / `get_event` | browse calendars & events (window expands recurrences) | read-only |
+| `get_free_busy` | check availability for people before scheduling | read-only |
+| `create_event` / `update_event` | create / update a meeting (invites attendees) | read-write + `OUTLOOK_ALLOW_SEND` |
+| `respond_to_event` | accept / decline / tentatively accept an invite | read-write + `OUTLOOK_ALLOW_SEND` |
+| `cancel_event` / `delete_event` | cancel a meeting / delete an event | admin + `OUTLOOK_ALLOW_DELETE` |
+
+> **Access is ultimately governed by your Microsoft account's granted scopes.** Calendar tools need the
+> `Calendars.ReadWrite` delegated scope (included in the defaults). If your token wasn't consented for it,
+> Graph returns 403 — the suite's modes/flags are defence in depth on top of that Microsoft-level control.
+> Downscope with `OUTLOOK_SCOPES` (e.g. drop `Calendars.ReadWrite`, or use `Calendars.Read` for read-only).
 
 ## Install
 
