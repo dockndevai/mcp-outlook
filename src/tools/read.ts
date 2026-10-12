@@ -7,6 +7,13 @@ const folder = z
   .optional()
   .describe("Mail folder id or well-known name (inbox, sentitems, drafts, archive, deleteditems). Defaults to the whole mailbox.");
 
+const cursor = z
+  .string()
+  .optional()
+  .describe(
+    "Pagination cursor from a previous call's next_cursor. When set, the next page is fetched directly and other filters are ignored.",
+  );
+
 export const readTools: ToolDef[] = [
   {
     name: "whoami",
@@ -51,22 +58,24 @@ export const readTools: ToolDef[] = [
       title: "List messages",
       description:
         "List messages, most recent first. Optionally scope to a folder and/or only unread messages. Returns compact " +
-        "summaries (id, subject, from, received, isRead, hasAttachments, preview). Fetch full bodies with get_message.",
+        "summaries (id, subject, from, received, isRead, hasAttachments, preview) plus a next_cursor if more results " +
+        "exist. Fetch full bodies with get_message.",
       inputSchema: {
         folder,
         unread_only: z.boolean().optional().describe("Only return unread messages"),
         top: z.number().int().min(1).max(200).optional().describe("Maximum messages to return (capped by OUTLOOK_MAX_RESULTS)"),
+        cursor,
       },
     },
     handler: async (a, { client, policy }) => {
       policy.guard({ tool: "list_messages", capability: "read", folder: a.folder as string | undefined });
-      return jsonResult(
-        await client.listMessages({
-          folder: a.folder as string | undefined,
-          unreadOnly: a.unread_only as boolean | undefined,
-          top: a.top as number | undefined,
-        }),
-      );
+      const page = await client.listMessages({
+        folder: a.folder as string | undefined,
+        unreadOnly: a.unread_only as boolean | undefined,
+        top: a.top as number | undefined,
+        cursor: a.cursor as string | undefined,
+      });
+      return jsonResult({ items: page.items, next_cursor: page.nextLink });
     },
   },
   {
@@ -76,15 +85,18 @@ export const readTools: ToolDef[] = [
       title: "Search messages",
       description:
         "Full-text search across the mailbox (subject, body, sender, recipients) using Microsoft Graph $search. " +
-        'Example queries: "invoice", "from:alice@contoso.com", "subject:release". Returns compact summaries.',
+        'Example queries: "invoice", "from:alice@contoso.com", "subject:release". Returns compact summaries plus ' +
+        "a next_cursor if more results exist.",
       inputSchema: {
         query: z.string().min(1).describe('Search text, e.g. "quarterly report" or "from:bob@contoso.com"'),
         top: z.number().int().min(1).max(200).optional().describe("Maximum results (capped by OUTLOOK_MAX_RESULTS)"),
+        cursor,
       },
     },
     handler: async (a, { client, policy }) => {
       policy.guard({ tool: "search_messages", capability: "read" });
-      return jsonResult(await client.searchMessages(a.query as string, a.top as number | undefined));
+      const page = await client.searchMessages(a.query as string, a.top as number | undefined, a.cursor as string | undefined);
+      return jsonResult({ items: page.items, next_cursor: page.nextLink });
     },
   },
   {
@@ -122,14 +134,39 @@ export const readTools: ToolDef[] = [
     capability: "read",
     config: {
       title: "List contacts",
-      description: "List the mailbox's personal contacts (display name, email addresses, company).",
+      description:
+        "List the mailbox's personal contacts (display name, email addresses, company). Returns a next_cursor if " +
+        "more results exist.",
       inputSchema: {
         top: z.number().int().min(1).max(200).optional().describe("Maximum contacts to return (capped by OUTLOOK_MAX_RESULTS)"),
+        cursor,
       },
     },
     handler: async (a, { client, policy }) => {
       policy.guard({ tool: "list_contacts", capability: "read" });
-      return jsonResult(await client.listContacts(a.top as number | undefined));
+      const page = await client.listContacts(a.top as number | undefined, a.cursor as string | undefined);
+      return jsonResult({ items: page.items, next_cursor: page.nextLink });
+    },
+  },
+  {
+    name: "search_contacts",
+    capability: "read",
+    config: {
+      title: "Search contacts",
+      description:
+        "Search the mailbox's personal contacts by display name or email address using Microsoft Graph $search. " +
+        'Example queries: "alice" or "alice@contoso.com". Returns display name, email addresses, company, and a ' +
+        "next_cursor if more results exist.",
+      inputSchema: {
+        query: z.string().min(1).describe('Search text, e.g. "alice" or "alice@contoso.com"'),
+        top: z.number().int().min(1).max(200).optional().describe("Maximum results (capped by OUTLOOK_MAX_RESULTS)"),
+        cursor,
+      },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "search_contacts", capability: "read" });
+      const page = await client.searchContacts(a.query as string, a.top as number | undefined, a.cursor as string | undefined);
+      return jsonResult({ items: page.items, next_cursor: page.nextLink });
     },
   },
 
@@ -142,15 +179,20 @@ export const readTools: ToolDef[] = [
       description:
         "List the files and folders in a OneDrive folder. Give a `path` relative to the drive root (e.g. " +
         '"/Documents"), or an `item_id` from a previous result. Omit both for the root. Returns id, name, ' +
-        "isFolder, size, childCount, lastModified, webUrl.",
+        "isFolder, size, childCount, lastModified, webUrl, plus a next_cursor if more results exist.",
       inputSchema: {
         path: z.string().optional().describe('Folder path from the drive root, e.g. "/Documents/Reports". Omit for root.'),
         item_id: z.string().optional().describe("Folder item id (from a previous list). Alternative to path."),
+        cursor,
       },
     },
     handler: async (a, { client, policy }) => {
       policy.guard({ tool: "list_drive_items", capability: "read" });
-      return jsonResult(await client.listDriveItems({ path: a.path as string | undefined, id: a.item_id as string | undefined }));
+      const page = await client.listDriveItems(
+        { path: a.path as string | undefined, id: a.item_id as string | undefined },
+        a.cursor as string | undefined,
+      );
+      return jsonResult({ items: page.items, next_cursor: page.nextLink });
     },
   },
   {
@@ -174,16 +216,20 @@ export const readTools: ToolDef[] = [
     capability: "read",
     config: {
       title: "Search OneDrive",
-      description: "Search across OneDrive for files and folders matching a query (name/content).",
+      description:
+        "Search across OneDrive for files and folders matching a query (name/content). Returns a next_cursor if " +
+        "more results exist.",
       inputSchema: {
         query: z.string().min(1).describe("Search text."),
         top: z.number().int().min(1).max(200).optional().describe("Maximum results (capped by OUTLOOK_MAX_RESULTS)"),
+        cursor,
       },
     },
     handler: async (a, { client, policy }) => {
       policy.guard({ tool: "search_drive_files", capability: "read" });
       const top = Math.min(client.maxResults, (a.top as number) ?? client.maxResults);
-      return jsonResult(await client.searchDrive(a.query as string, top));
+      const page = await client.searchDrive(a.query as string, top, a.cursor as string | undefined);
+      return jsonResult({ items: page.items, next_cursor: page.nextLink });
     },
   },
   {
@@ -228,24 +274,26 @@ export const readTools: ToolDef[] = [
       title: "List calendar events",
       description:
         "List events, newest window first. Give `start` and `end` (ISO 8601) to get a time window with recurring " +
-        "events expanded; omit them to list upcoming/raw events. Optionally scope to one calendar.",
+        "events expanded; omit them to list upcoming/raw events. Optionally scope to one calendar. Returns a " +
+        "next_cursor if more results exist.",
       inputSchema: {
         start: z.string().optional().describe("Window start, ISO 8601 (e.g. 2026-10-10T00:00:00Z). Pair with `end`."),
         end: z.string().optional().describe("Window end, ISO 8601. Pair with `start`."),
         calendar_id: z.string().optional().describe("Calendar id (from list_calendars). Defaults to the default calendar."),
         limit: z.number().int().min(1).max(200).optional().describe("Max events (capped by OUTLOOK_MAX_RESULTS)."),
+        cursor,
       },
     },
     handler: async (a, { client, policy }) => {
       policy.guard({ tool: "list_events", capability: "read" });
-      return jsonResult(
-        await client.listEvents({
-          start: a.start as string | undefined,
-          end: a.end as string | undefined,
-          calendarId: a.calendar_id as string | undefined,
-          top: a.limit as number | undefined,
-        }),
-      );
+      const page = await client.listEvents({
+        start: a.start as string | undefined,
+        end: a.end as string | undefined,
+        calendarId: a.calendar_id as string | undefined,
+        top: a.limit as number | undefined,
+        cursor: a.cursor as string | undefined,
+      });
+      return jsonResult({ items: page.items, next_cursor: page.nextLink });
     },
   },
   {
