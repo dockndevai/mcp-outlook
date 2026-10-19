@@ -1,7 +1,7 @@
 {
   "name": "@dockndevai/mcp-outlook",
   "mcpName": "io.github.dockndevai/mcp-outlook",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Model Context Protocol server for Microsoft Outlook mail (Microsoft Graph) — read, search, draft, send, reply, forward and organize email plus manage OneDrive files, with browser sign-in and safe-by-default access modes and guards.",
   "type": "module",
   "license": "MIT",
@@ -47,12 +47,12 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "zod": "^4.5.4"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^26.5.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.5"
   }
 }
