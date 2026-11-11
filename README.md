@@ -23,6 +23,7 @@ The server starts **read-only** (see [Safe by default](#safe-by-default)); highe
 | `get_message` | one message with full body + recipients | read-only |
 | `list_attachments` | attachment metadata (bytes not returned) | read-only |
 | `list_contacts` | personal contacts | read-only |
+| `search_contacts` | search contacts by name/email | read-only |
 | `create_draft` | prepare a draft without sending | read-write |
 | `send_mail` | compose & send a new email | read-write + `OUTLOOK_ALLOW_SEND` |
 | `reply_mail` / `forward_mail` | reply (all) / forward a message | read-write + `OUTLOOK_ALLOW_SEND` |
