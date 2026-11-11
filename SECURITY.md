@@ -24,11 +24,14 @@ and grant it the least access it needs.
   supports MCP elicitation they also pause for a human to approve the exact recipients first.
 - **Require a human.** Set `OUTLOOK_REQUIRE_HUMAN_APPROVAL=true` so every confirmed operation (`send_mail`,
   `reply_mail`, `forward_mail`, `create_event`, `update_event`, `respond_to_event`, `cancel_event`,
-  `delete_message`, `delete_drive_item`, `delete_event`, and laya-guard `confirm` verdicts) is refused when
+  `delete_message`, `delete_drive_item`, `delete_event`, `upload_drive_file`, `move_message`,
+  `move_drive_item`, and laya-guard `confirm` verdicts) is refused when
   the client cannot show an approval prompt. Each approval is bound to the exact tool and arguments
   (fingerprint). For existing objects it is also bound to the target's version: the Graph `changeKey` of
-  the message or event, or the `eTag` of the OneDrive item. If that changed while the human was deciding,
-  the action is refused. Sends, replies, forwards, event creation and invitation responses have no existing
+  the message or event, or the `eTag` of the OneDrive item. `upload_drive_file` pins the `eTag` of the file
+  currently at the path (or the fact that nothing is there), so an overwrite of a file edited, or created,
+  while the human was deciding is refused; an unreadable target fails closed. If that changed while the
+  human was deciding, the action is refused. Sends, replies, forwards, event creation and invitation responses have no existing
   object to version; they are bound to the fingerprint of the exact arguments shown. Approval receipts are
   written to the audit log (`"audit":"approval"`, with `approvedBy` = `human` or `flag-only`).
 - **Protect folders.** Folders listed in `OUTLOOK_PROTECTED_FOLDERS` (e.g. `sentitems`, `archive`)
@@ -50,8 +53,8 @@ and grant it the least access it needs.
 - Version pins are read from Graph before and after the prompt, not passed to the mutating call, so a change
   in the instant between the second read and the request is not caught. A message's `changeKey` also moves
   when it is marked read, and an event's when an attendee responds, so those cases fail closed and the
-  operation must be re-requested. `upload_drive_file`, `move_message`, `move_drive_item` and
-  `create_drive_folder` do not prompt at all.
+  operation must be re-requested. `create_drive_folder` does not prompt: it is additive (an existing folder
+  of the same name is never replaced, the new one is renamed).
 - `send_mail` and friends trust the recipients and body you pass; there is no outbound content
   filtering beyond the human-confirmation prompt. Keep `OUTLOOK_ALLOW_SEND` off unless you need it.
 

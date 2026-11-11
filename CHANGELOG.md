@@ -11,6 +11,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   60 s request timeout, and a timeout fell through to "approved" (the `OUTLOOK_ALLOW_SEND` /
   `OUTLOOK_ALLOW_DELETE` gate had already passed). A prompt nobody answered therefore auto-approved a send
   or a delete. A timeout is now a refusal, and the wait defaults to 5 minutes.
+- **`upload_drive_file`, `move_message` and `move_drive_item` now ask a human first.** They change an existing
+  object but had no confirmation. `upload_drive_file` can silently overwrite a file: it now reads what is at the
+  path, shows the path, whether it overwrites (and the existing size) or creates a new file, and the byte length,
+  and pins the file's `eTag` (or its absence) across the prompt. The moves show the item and the source and
+  destination, and pin the message `changeKey` / OneDrive `eTag`. Dry-run still returns before any lookup or
+  prompt. `create_drive_folder` stays unprompted: it is additive (name conflicts are renamed, never replaced).
 
 ### Added
 - **Approvals are bound to the exact action.** The prompt shows the tool, the full (secret-redacted)

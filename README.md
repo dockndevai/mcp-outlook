@@ -27,13 +27,14 @@ The server starts **read-only** (see [Safe by default](#safe-by-default)); highe
 | `send_mail` | compose & send a new email | read-write + `OUTLOOK_ALLOW_SEND` |
 | `reply_mail` / `forward_mail` | reply (all) / forward a message | read-write + `OUTLOOK_ALLOW_SEND` |
 | `mark_read` | mark read / unread (reversible) | read-write |
-| `move_message` | move to another folder (reversible) | read-write |
+| `move_message` | move to another folder (asks a human first) | read-write |
 | `delete_message` | delete (to Deleted Items) | admin + `OUTLOOK_ALLOW_DELETE` |
 | `list_drive_items` / `get_drive_item` | browse OneDrive files & folders | read-only |
 | `search_drive_files` | search OneDrive | read-only |
 | `download_drive_file` | read a OneDrive file's text | read-only |
-| `upload_drive_file` | create/overwrite a OneDrive file | read-write |
-| `create_drive_folder` / `move_drive_item` | create folder / move-rename | read-write |
+| `upload_drive_file` | create/overwrite a OneDrive file (asks a human first) | read-write |
+| `create_drive_folder` | create a folder (additive; never replaces an existing one, no prompt) | read-write |
+| `move_drive_item` | move / rename a OneDrive item (asks a human first) | read-write |
 | `delete_drive_item` | delete a OneDrive item (→ recycle bin) | admin + `OUTLOOK_ALLOW_DELETE` |
 | `list_calendars` / `list_events` / `get_event` | browse calendars & events (window expands recurrences) | read-only |
 | `get_free_busy` | check availability for people before scheduling | read-only |
@@ -94,7 +95,7 @@ The access model is enforced by [`src/security.ts`](src/security.ts) — defence
 - **`OUTLOOK_ALLOW_SEND`** — sending mail (send / reply / forward) can't be undone, so on top of `read-write` it also requires this flag. Drafting is always allowed in read-write; nothing leaves the mailbox until sent.
 - **`OUTLOOK_ALLOW_DELETE`** — deletes require this flag on top of `admin` mode.
 - **`OUTLOOK_FOLDER_ALLOWLIST` / `OUTLOOK_PROTECTED_FOLDERS`** — confine which folders can be written to / moved into; mark folders (e.g. `sentitems`, `archive`) that may be read but never modified.
-- **Interactive confirmation** — when the client supports MCP elicitation, sending mail (`send_mail` / `reply_mail` / `forward_mail`), calendar invitations/changes/responses (`create_event` / `update_event` / `respond_to_event`), `cancel_event` and the delete tools (`delete_message` / `delete_drive_item` / `delete_event`) pause and ask the **human** to approve before running. The prompt shows the tool, the exact (secret-redacted) arguments and a fingerprint of them; for sends the recipients (to/cc/bcc) and subject are listed separately so they stay visible when a long body is truncated in the arguments dump (the dump is cut at 1500 characters). For existing objects (`delete_message`, `delete_drive_item`, `cancel_event`, `delete_event`, `update_event`) the target's version (Graph `changeKey` for messages and events, `eTag` for OneDrive items) is pinned across the prompt and the action is refused if it changed. A prompt nobody answers is a refusal. Clients that can't elicit fall back to the `OUTLOOK_ALLOW_SEND` / `OUTLOOK_ALLOW_DELETE` gates.
+- **Interactive confirmation** — when the client supports MCP elicitation, sending mail (`send_mail` / `reply_mail` / `forward_mail`), calendar invitations/changes/responses (`create_event` / `update_event` / `respond_to_event`), `cancel_event`, the delete tools (`delete_message` / `delete_drive_item` / `delete_event`) and the writes that change an existing object (`upload_drive_file`, `move_message`, `move_drive_item`) pause and ask the **human** to approve before running. The prompt shows the tool, the exact (secret-redacted) arguments and a fingerprint of them; for sends the recipients (to/cc/bcc) and subject are listed separately so they stay visible when a long body is truncated in the arguments dump (the dump is cut at 1500 characters). `upload_drive_file` shows the path, whether it overwrites an existing file (with its size) or creates a new one, and the byte length; the moves show the item and where it goes from and to. For existing objects (`delete_message`, `delete_drive_item`, `cancel_event`, `delete_event`, `update_event`, `move_message`, `move_drive_item`, and the file at an `upload_drive_file` path — or its absence) the target's version (Graph `changeKey` for messages and events, `eTag` for OneDrive items) is pinned across the prompt and the action is refused if it changed. A prompt nobody answers is a refusal. Clients that can't elicit fall back to the `OUTLOOK_ALLOW_SEND` / `OUTLOOK_ALLOW_DELETE` gates.
 - **`OUTLOOK_REQUIRE_HUMAN_APPROVAL`** — when `true` (default `false`), the operations above are **refused** if the client cannot elicit, instead of falling back to the `OUTLOOK_ALLOW_*` gates alone.
 - **`OUTLOOK_DRY_RUN`** — validate and log writes without executing them.
 - **`OUTLOOK_AUDIT_LOG`** — a JSON audit line per guarded operation, on stderr (default on).

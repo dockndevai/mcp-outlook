@@ -37,3 +37,13 @@ export function driveItemDetails(i: DriveItemRef | undefined): Details {
     "item url": i.webUrl,
   };
 }
+
+/** What `upload_drive_file` is about to replace: the existing item at the path, or a new file. */
+export function uploadDetails(existing: DriveItemRef | undefined): Details {
+  if (!existing) return { "target state": "new file (nothing exists at this path)" };
+  if (existing.isFolder) return { "target state": "a FOLDER already exists at this path (the upload will fail)" };
+  return {
+    "target state": `OVERWRITES an existing file (${existing.size ?? "?"} bytes, last modified ${existing.lastModified ?? "?"})`,
+    "item url": existing.webUrl,
+  };
+}
