@@ -405,6 +405,63 @@ export class GraphClient {
     }
   }
 
+  /**
+   * The item currently at a OneDrive path together with its version token (id + `eTag`), or `undefined`
+   * when nothing exists there (404 = a new file). Used to pin an overwrite across an approval prompt.
+   * Transport/permission errors throw, so a caller that cannot tell "absent" from "unreadable" fails closed.
+   */
+  async driveItemAtPath(path: string): Promise<{ item: DriveItemRef; version: string } | undefined> {
+    const q = "$select=id,name,size,folder,file,lastModifiedDateTime,webUrl,eTag";
+    const i = await this.getOrUndefined<Record<string, unknown>>(this.mailbox(`${this.driveRef({ path })}?${q}`));
+    if (!i) return undefined;
+    return {
+      item: this.summarizeDriveItem(i),
+      version: versionToken(String(i.id ?? ""), (i.eTag as string | undefined) ?? (i["@odata.etag"] as string | undefined)),
+    };
+  }
+
+  /** Best-effort path (from the drive root) of a OneDrive item, for approval prompts. Never throws. */
+  async driveItemPath(id: string): Promise<string | undefined> {
+    try {
+      const i = await this.getOrUndefined<{ name?: string; parentReference?: { path?: string } }>(
+        this.mailbox(`/drive/items/${encodeURIComponent(id)}?$select=id,name,parentReference`),
+      );
+      if (!i) return undefined;
+      // parentReference.path looks like "/drive/root:/Documents" ("/drives/<id>/root:/..." on other drives);
+      // the drive's root folder itself has no parentReference.path.
+      const pp = i.parentReference?.path;
+      if (pp === undefined) return "/";
+      return `${pp.replace(/^.*?root:/, "")}/${i.name ?? ""}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Best-effort display name of a mail folder (id or well-known name). Never throws. */
+  async mailFolderName(folder: string): Promise<string | undefined> {
+    try {
+      const f = await this.getOrUndefined<{ displayName?: string }>(
+        this.mailbox(`/mailFolders/${encodeURIComponent(folder)}?$select=displayName`),
+      );
+      return f?.displayName;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Best-effort display name of the folder a message currently sits in. Never throws. */
+  async messageFolderName(id: string): Promise<string | undefined> {
+    try {
+      const m = await this.getOrUndefined<{ parentFolderId?: string }>(
+        this.mailbox(`/messages/${encodeURIComponent(id)}?$select=parentFolderId`),
+      );
+      if (!m?.parentFolderId) return undefined;
+      return (await this.mailFolderName(m.parentFolderId)) ?? m.parentFolderId;
+    } catch {
+      return undefined;
+    }
+  }
+
   // --- Identity ---
   me() {
     return this.request<Record<string, unknown>>(this.mailbox(""));

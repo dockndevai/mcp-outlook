@@ -6,7 +6,7 @@ import type { AppConfig } from "../src/config.js";
 import { GraphClient, versionToken } from "../src/graph/client.js";
 import { buildServer } from "../src/server.js";
 
-const config = (requireHumanApproval = false): AppConfig => ({
+const config = (requireHumanApproval = false, dryRun = false): AppConfig => ({
   connection: {
     graphBaseUrl: "https://graph.test/v1.0",
     authorityBase: "https://login.test",
@@ -21,7 +21,7 @@ const config = (requireHumanApproval = false): AppConfig => ({
     protectedFolders: [],
     allowSend: true,
     allowDelete: true,
-    dryRun: false,
+    dryRun,
     auditLog: false,
     requireHumanApproval,
   },
@@ -30,8 +30,8 @@ const config = (requireHumanApproval = false): AppConfig => ({
 type Answer = { action: "accept" | "decline"; content?: Record<string, unknown> };
 
 /** Connect an in-memory MCP client (optionally able to answer elicitation) to a freshly built server. */
-async function connect(opts: { requireHuman?: boolean; answer?: (message: string) => Answer | Promise<Answer>; elicits?: boolean }) {
-  const { server } = buildServer(config(opts.requireHuman));
+async function connect(opts: { requireHuman?: boolean; dryRun?: boolean; answer?: (message: string) => Answer | Promise<Answer>; elicits?: boolean }) {
+  const { server } = buildServer(config(opts.requireHuman, opts.dryRun));
   const prompts: string[] = [];
   const client = new Client({ name: "t", version: "0" }, { capabilities: opts.elicits === false ? {} : { elicitation: {} } });
   if (opts.elicits !== false) {
@@ -260,6 +260,223 @@ describe("other destructive / outward tools bind too", () => {
   });
 });
 
+describe("upload_drive_file approval (can overwrite an existing file)", () => {
+  const args = { path: "/Documents/notes.md", content: "héllo wörld" }; // 11 chars, 13 UTF-8 bytes
+  const existing = { item: { id: "D1", name: "notes.md", isFolder: false, size: 4096, lastModified: "2026-11-01T10:00:00Z" }, version: "d1" };
+
+  it("overwrite: shows the path, that it replaces an existing file, and the byte length; then uploads", async () => {
+    vi.spyOn(GraphClient.prototype, "driveItemAtPath").mockResolvedValue(existing);
+    const up = vi.spyOn(GraphClient.prototype, "uploadFile").mockResolvedValue({ id: "D1" });
+    const { client, prompts } = await connect({});
+    const res = await client.callTool({ name: "upload_drive_file", arguments: args });
+    expect(res.isError).toBeFalsy();
+    expect(up).toHaveBeenCalledWith("/Documents/notes.md", "héllo wörld");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("tool: upload_drive_file");
+    expect(prompts[0]).toContain("path: /Documents/notes.md");
+    expect(prompts[0]).toContain("OVERWRITES an existing file");
+    expect(prompts[0]).toContain("4096 bytes");
+    expect(prompts[0]).toContain("new content: 13 bytes");
+    expect(prompts[0]).toContain("resource version: d1");
+  });
+
+  it("new file: still prompts, showing the path and byte length", async () => {
+    vi.spyOn(GraphClient.prototype, "driveItemAtPath").mockResolvedValue(undefined);
+    const up = vi.spyOn(GraphClient.prototype, "uploadFile").mockResolvedValue({ id: "D2" });
+    const { client, prompts } = await connect({});
+    await client.callTool({ name: "upload_drive_file", arguments: args });
+    expect(up).toHaveBeenCalledTimes(1);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("path: /Documents/notes.md");
+    expect(prompts[0]).toContain("new file");
+    expect(prompts[0]).toContain("new content: 13 bytes");
+  });
+
+  it("does NOT upload when the human declines", async () => {
+    vi.spyOn(GraphClient.prototype, "driveItemAtPath").mockResolvedValue(existing);
+    const up = vi.spyOn(GraphClient.prototype, "uploadFile").mockResolvedValue({});
+    const { client } = await connect({ answer: () => ({ action: "decline" }) });
+    const res = await client.callTool({ name: "upload_drive_file", arguments: args });
+    expect(text(res)).toContain("Upload cancelled");
+    expect(up).not.toHaveBeenCalled();
+  });
+
+  it("does NOT overwrite when the file was edited (eTag changed) while the human was deciding", async () => {
+    const probe = vi.spyOn(GraphClient.prototype, "driveItemAtPath");
+    probe.mockResolvedValueOnce(existing).mockResolvedValueOnce(existing).mockResolvedValue({ ...existing, version: "d2" });
+    const up = vi.spyOn(GraphClient.prototype, "uploadFile").mockResolvedValue({});
+    const { client } = await connect({});
+    const res = await client.callTool({ name: "upload_drive_file", arguments: args });
+    expect(text(res)).toContain("resource changed since the prompt");
+    expect(up).not.toHaveBeenCalled();
+  });
+
+  it("does NOT upload when a file appeared at the path while the human was approving a 'new file'", async () => {
+    const probe = vi.spyOn(GraphClient.prototype, "driveItemAtPath");
+    probe.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined).mockResolvedValue(existing);
+    const up = vi.spyOn(GraphClient.prototype, "uploadFile").mockResolvedValue({});
+    const { client } = await connect({});
+    const res = await client.callTool({ name: "upload_drive_file", arguments: args });
+    expect(text(res)).toContain("resource changed since the prompt");
+    expect(up).not.toHaveBeenCalled();
+  });
+
+  it("fails closed (no prompt, no upload) when the target cannot be inspected", async () => {
+    vi.spyOn(GraphClient.prototype, "driveItemAtPath").mockRejectedValue(new Error("Graph 403"));
+    const up = vi.spyOn(GraphClient.prototype, "uploadFile").mockResolvedValue({});
+    const { client, prompts } = await connect({});
+    const res = await client.callTool({ name: "upload_drive_file", arguments: args });
+    expect(res.isError).toBe(true);
+    expect(prompts).toHaveLength(0);
+    expect(up).not.toHaveBeenCalled();
+  });
+
+  it("is refused when the client cannot elicit and human approval is required", async () => {
+    vi.spyOn(GraphClient.prototype, "driveItemAtPath").mockResolvedValue(existing);
+    const up = vi.spyOn(GraphClient.prototype, "uploadFile").mockResolvedValue({});
+    const { client } = await connect({ elicits: false, requireHuman: true });
+    const res = await client.callTool({ name: "upload_drive_file", arguments: args });
+    expect(text(res)).toContain("no human approval channel");
+    expect(up).not.toHaveBeenCalled();
+  });
+
+  it("dry-run returns before any lookup or prompt", async () => {
+    const probe = vi.spyOn(GraphClient.prototype, "driveItemAtPath").mockResolvedValue(existing);
+    const up = vi.spyOn(GraphClient.prototype, "uploadFile").mockResolvedValue({});
+    const { client, prompts } = await connect({ dryRun: true });
+    const res = await client.callTool({ name: "upload_drive_file", arguments: args });
+    expect(text(res)).toContain("[dry-run]");
+    expect(prompts).toHaveLength(0);
+    expect(probe).not.toHaveBeenCalled();
+    expect(up).not.toHaveBeenCalled();
+  });
+});
+
+describe("move_message approval", () => {
+  const args = { id: "AAMk-1", destination: "deleteditems" };
+  const stub = () => {
+    vi.spyOn(GraphClient.prototype, "messageContext").mockResolvedValue({ subject: "Contract", from: "legal@contoso.com", to: ["me@contoso.com"] });
+    vi.spyOn(GraphClient.prototype, "messageFolderName").mockResolvedValue("Inbox");
+    vi.spyOn(GraphClient.prototype, "mailFolderName").mockResolvedValue("Deleted Items");
+  };
+
+  it("shows the message, the source folder and the destination, then moves", async () => {
+    stub();
+    vi.spyOn(GraphClient.prototype, "messageVersion").mockResolvedValue("m1");
+    const mv = vi.spyOn(GraphClient.prototype, "moveMessage").mockResolvedValue({ id: "new" });
+    const { client, prompts } = await connect({});
+    const res = await client.callTool({ name: "move_message", arguments: args });
+    expect(res.isError).toBeFalsy();
+    expect(mv).toHaveBeenCalledWith("AAMk-1", "deleteditems");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("tool: move_message");
+    expect(prompts[0]).toContain("message subject: Contract");
+    expect(prompts[0]).toContain("from folder: Inbox");
+    expect(prompts[0]).toContain("to folder: Deleted Items (deleteditems)");
+    expect(prompts[0]).toContain("resource version: m1");
+  });
+
+  it("does NOT move when the message changed while the human was deciding", async () => {
+    stub();
+    vi.spyOn(GraphClient.prototype, "messageVersion").mockImplementation(sequence("m1", "m2"));
+    const mv = vi.spyOn(GraphClient.prototype, "moveMessage").mockResolvedValue({});
+    const { client } = await connect({});
+    const res = await client.callTool({ name: "move_message", arguments: args });
+    expect(text(res)).toContain("resource changed since the prompt");
+    expect(mv).not.toHaveBeenCalled();
+  });
+
+  it("does NOT move when the human declines, and is refused without an approval channel when required", async () => {
+    stub();
+    vi.spyOn(GraphClient.prototype, "messageVersion").mockResolvedValue("m1");
+    const mv = vi.spyOn(GraphClient.prototype, "moveMessage").mockResolvedValue({});
+    const declined = await connect({ answer: () => ({ action: "decline" }) });
+    expect(text(await declined.client.callTool({ name: "move_message", arguments: args }))).toContain("Move cancelled");
+    const noChannel = await connect({ elicits: false, requireHuman: true });
+    expect(text(await noChannel.client.callTool({ name: "move_message", arguments: args }))).toContain("no human approval channel");
+    expect(mv).not.toHaveBeenCalled();
+  });
+
+  it("dry-run returns before any prompt", async () => {
+    stub();
+    const ver = vi.spyOn(GraphClient.prototype, "messageVersion").mockResolvedValue("m1");
+    const mv = vi.spyOn(GraphClient.prototype, "moveMessage").mockResolvedValue({});
+    const { client, prompts } = await connect({ dryRun: true });
+    expect(text(await client.callTool({ name: "move_message", arguments: args }))).toContain("[dry-run]");
+    expect(prompts).toHaveLength(0);
+    expect(ver).not.toHaveBeenCalled();
+    expect(mv).not.toHaveBeenCalled();
+  });
+});
+
+describe("move_drive_item approval", () => {
+  const args = { item_id: "D1", new_parent_id: "F9", new_name: "plan-final.docx" };
+  const stub = () => {
+    vi.spyOn(GraphClient.prototype, "driveItemContext").mockResolvedValue({ id: "D1", name: "plan.docx", isFolder: false, size: 10 });
+    vi.spyOn(GraphClient.prototype, "driveItemPath").mockImplementation(async (id: string) => (id === "D1" ? "/Docs/plan.docx" : "/Archive"));
+  };
+
+  it("shows the item, where it is now, where it goes and the new name, then moves", async () => {
+    stub();
+    vi.spyOn(GraphClient.prototype, "driveItemVersion").mockResolvedValue("d1");
+    const mv = vi.spyOn(GraphClient.prototype, "moveDriveItem").mockResolvedValue({ id: "D1" });
+    const { client, prompts } = await connect({});
+    const res = await client.callTool({ name: "move_drive_item", arguments: args });
+    expect(res.isError).toBeFalsy();
+    expect(mv).toHaveBeenCalledWith("D1", { newParentId: "F9", newName: "plan-final.docx" });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("tool: move_drive_item");
+    expect(prompts[0]).toContain("item name: plan.docx");
+    expect(prompts[0]).toContain("from: /Docs/plan.docx");
+    expect(prompts[0]).toContain("to folder: /Archive");
+    expect(prompts[0]).toContain("new name: plan-final.docx");
+    expect(prompts[0]).toContain("resource version: d1");
+  });
+
+  it("does NOT move when the item changed while the human was deciding", async () => {
+    stub();
+    vi.spyOn(GraphClient.prototype, "driveItemVersion").mockImplementation(sequence("d1", "d2"));
+    const mv = vi.spyOn(GraphClient.prototype, "moveDriveItem").mockResolvedValue({});
+    const { client } = await connect({});
+    const res = await client.callTool({ name: "move_drive_item", arguments: args });
+    expect(text(res)).toContain("resource changed since the prompt");
+    expect(mv).not.toHaveBeenCalled();
+  });
+
+  it("does NOT move when declined, and is refused without an approval channel when required", async () => {
+    stub();
+    vi.spyOn(GraphClient.prototype, "driveItemVersion").mockResolvedValue("d1");
+    const mv = vi.spyOn(GraphClient.prototype, "moveDriveItem").mockResolvedValue({});
+    const declined = await connect({ answer: () => ({ action: "decline" }) });
+    expect(text(await declined.client.callTool({ name: "move_drive_item", arguments: args }))).toContain("Move cancelled");
+    const noChannel = await connect({ elicits: false, requireHuman: true });
+    expect(text(await noChannel.client.callTool({ name: "move_drive_item", arguments: args }))).toContain("no human approval channel");
+    expect(mv).not.toHaveBeenCalled();
+  });
+
+  it("dry-run returns before any prompt", async () => {
+    stub();
+    const ver = vi.spyOn(GraphClient.prototype, "driveItemVersion").mockResolvedValue("d1");
+    const mv = vi.spyOn(GraphClient.prototype, "moveDriveItem").mockResolvedValue({});
+    const { client, prompts } = await connect({ dryRun: true });
+    expect(text(await client.callTool({ name: "move_drive_item", arguments: args }))).toContain("[dry-run]");
+    expect(prompts).toHaveLength(0);
+    expect(ver).not.toHaveBeenCalled();
+    expect(mv).not.toHaveBeenCalled();
+  });
+});
+
+describe("create_drive_folder stays unprompted (additive)", () => {
+  it("creates the folder without an approval prompt (it uses conflictBehavior=rename, so it can never replace anything)", async () => {
+    const mk = vi.spyOn(GraphClient.prototype, "createFolder").mockResolvedValue({ id: "F1" });
+    const { client, prompts } = await connect({ requireHuman: true });
+    const res = await client.callTool({ name: "create_drive_folder", arguments: { name: "Reports" } });
+    expect(res.isError).toBeFalsy();
+    expect(mk).toHaveBeenCalledTimes(1);
+    expect(prompts).toHaveLength(0);
+  });
+});
+
 describe("Graph version probes", () => {
   const client = () => new GraphClient(config().connection);
   const reply = (status: number, body: unknown) => ({
@@ -297,4 +514,35 @@ describe("Graph version probes", () => {
     expect(await client().driveItemVersion("D1")).toBe(versionToken("D1", '"{G},3"'));
     vi.unstubAllGlobals();
   });
+
+  it("driveItemAtPath addresses the item by path, keys the version on id + eTag, and maps 404 to undefined", async () => {
+    let seen = "";
+    vi.stubGlobal("fetch", async (url: string) => {
+      seen = url;
+      return reply(200, { id: "D1", name: "notes.md", eTag: '"{G},2"', size: 5 });
+    });
+    const got = await client().driveItemAtPath("/Documents/my notes.md");
+    expect(seen).toContain("/me/drive/root:/Documents/my%20notes.md:");
+    expect(got?.item.id).toBe("D1");
+    expect(got?.version).toBe(versionToken("D1", '"{G},2"'));
+    vi.stubGlobal("fetch", async () => reply(404, { error: { message: "not found" } }));
+    expect(await client().driveItemAtPath("/nope.md")).toBeUndefined();
+    vi.stubGlobal("fetch", async () => reply(403, { error: { message: "denied" } }));
+    await expect(client().driveItemAtPath("/x.md")).rejects.toThrow("denied");
+    vi.unstubAllGlobals();
+  });
+
+  it("driveItemPath builds a drive-relative path from parentReference, and never throws", async () => {
+    vi.stubGlobal("fetch", async () => reply(200, { id: "D1", name: "plan.docx", parentReference: { path: "/drive/root:/Docs/Q3" } }));
+    expect(await client().driveItemPath("D1")).toBe("/Docs/Q3/plan.docx");
+    vi.stubGlobal("fetch", async () => reply(200, { id: "D2", name: "top.txt", parentReference: { path: "/drive/root:" } }));
+    expect(await client().driveItemPath("D2")).toBe("/top.txt");
+    vi.stubGlobal("fetch", async () => reply(200, { id: "R", name: "root" }));
+    expect(await client().driveItemPath("R")).toBe("/");
+    vi.stubGlobal("fetch", async () => reply(500, { error: { message: "boom" } }));
+    expect(await client().driveItemPath("D1")).toBeUndefined();
+    expect(await client().messageFolderName("M1")).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
 });
+

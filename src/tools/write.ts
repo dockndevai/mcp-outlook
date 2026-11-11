@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Recipient } from "../graph/client.js";
 import type { ToolDef } from "./types.js";
-import { eventDetails, messageDetails } from "./context.js";
+import { driveItemDetails, eventDetails, messageDetails, uploadDetails } from "./context.js";
 import { jsonResult, textResult } from "./types.js";
 
 /**
@@ -9,7 +9,9 @@ import { jsonResult, textResult } from "./types.js";
  *
  * Sending mail (send_mail, reply_mail, forward_mail) is doubly gated: it needs OUTLOOK_ALLOW_SEND=true
  * *and* pauses for a human confirmation via elicitation, because a sent message can't be unsent. The
- * non-sending writes (create_draft, move_message, mark_read) are reversible and only need read-write.
+ * non-sending writes need only read-write: create_draft, mark_read and create_drive_folder are reversible or
+ * additive and run unprompted; upload_drive_file (can overwrite), move_message and move_drive_item change an
+ * existing object, so they also pause for a human confirmation bound to that object's version.
  */
 
 const recipient = z.object({
@@ -205,18 +207,32 @@ export const writeTools: ToolDef[] = [
     config: {
       title: "Move a message",
       description:
-        "Move a message to another mail folder (by id or well-known name such as archive, deleteditems). Reversible: the " +
-        "message keeps its content and can be moved back. The destination folder is subject to the folder allowlist.",
+        "Move a message to another mail folder (by id or well-known name such as archive, deleteditems). Prompts for human " +
+        "confirmation showing the message and the source and destination folders. The message keeps its content and can be " +
+        "moved back. The destination folder is subject to the folder allowlist.",
       inputSchema: {
         id: z.string().describe("Message id to move"),
         destination: z.string().describe("Destination folder id or well-known name (e.g. archive, deleteditems)"),
       },
     },
-    handler: async (args, { client, policy }) => {
+    handler: async (args, { client, policy, confirm }) => {
       const id = args.id as string;
       const destination = args.destination as string;
       const { dryRun } = policy.guard({ tool: "move_message", capability: "write", folder: destination });
       if (dryRun) return textResult(`[dry-run] Would move message ${id} to ${destination}.`);
+      const [orig, from, to] = await Promise.all([client.messageContext(id), client.messageFolderName(id), client.mailFolderName(destination)]);
+      const ok = await confirm.confirm({
+        action: "move message",
+        target: id,
+        details: {
+          ...messageDetails("message", orig),
+          "from folder": from,
+          "to folder": to && to !== destination ? `${to} (${destination})` : destination,
+        },
+        // id + changeKey: a message modified or replaced while the human decided is refused.
+        probe: () => client.messageVersion(id),
+      });
+      if (!ok.approved) return textResult(`Move cancelled — ${ok.reason}.`);
       return jsonResult(await client.moveMessage(id, destination));
     },
   },
@@ -229,17 +245,33 @@ export const writeTools: ToolDef[] = [
       title: "Upload / write a OneDrive file",
       description:
         "Create or overwrite a text file in OneDrive at the given path (≤4 MB). Parent folders in the path are " +
-        "created as needed. Reversible-ish: an overwritten file's previous version is kept in OneDrive version history.",
+        "created as needed. Prompts for human confirmation showing the path, whether it overwrites an existing file, and the " +
+        "byte length; the existing file's version is pinned, so an edit while the prompt is open cancels the write. An " +
+        "overwritten file's previous version is kept in OneDrive version history.",
       inputSchema: {
         path: z.string().min(1).describe('File path from the drive root, e.g. "/Documents/notes.md".'),
         content: z.string().describe("Full UTF-8 text contents to write."),
       },
     },
-    handler: async (args, { client, policy }) => {
+    handler: async (args, { client, policy, confirm }) => {
       const path = args.path as string;
+      const content = args.content as string;
       const { dryRun } = policy.guard({ tool: "upload_drive_file", capability: "write" });
       if (dryRun) return textResult(`[dry-run] Would write OneDrive file ${path}.`);
-      return jsonResult(await client.uploadFile(path, args.content as string));
+      // Look at what is at the path now. 404 = a new file; any other failure throws, so an unreadable target
+      // fails closed instead of being treated as "new".
+      const existing = await client.driveItemAtPath(path);
+      const ok = await confirm.confirm({
+        action: existing ? "overwrite OneDrive file" : "create OneDrive file",
+        target: path,
+        // path and sizes sit outside the (1500-char, key-sorted) arguments dump so a long content can never hide them.
+        details: { path, ...uploadDetails(existing?.item), "new content": `${Buffer.byteLength(content, "utf8")} bytes` },
+        // id + eTag of what is there now, or "absent" for a new file: a file edited, replaced, or created at
+        // this path while the human decided is refused (the overwrite would hit something they were not shown).
+        probe: async () => (await client.driveItemAtPath(path))?.version ?? "absent",
+      });
+      if (!ok.approved) return textResult(`Upload cancelled — ${ok.reason}.`);
+      return jsonResult(await client.uploadFile(path, content));
     },
   },
   {
@@ -247,7 +279,9 @@ export const writeTools: ToolDef[] = [
     capability: "write",
     config: {
       title: "Create a OneDrive folder",
-      description: "Create a new folder inside a OneDrive folder (by parent `path` or `item_id`; omit both for the root).",
+      description:
+        "Create a new folder inside a OneDrive folder (by parent `path` or `item_id`; omit both for the root). Additive: " +
+        "an existing folder of the same name is never replaced (the new one is renamed), so it runs without a prompt.",
       inputSchema: {
         name: z.string().min(1).describe("New folder name."),
         parent_path: z.string().optional().describe("Parent folder path from the drive root. Omit for root."),
@@ -272,23 +306,39 @@ export const writeTools: ToolDef[] = [
       title: "Move / rename a OneDrive item",
       description:
         "Move a OneDrive file or folder to another folder and/or rename it. Give the item id, and a new parent " +
-        "folder id and/or a new name. Reversible.",
+        "folder id and/or a new name. Prompts for human confirmation showing the item, where it is now and where it goes; " +
+        "the item's version is pinned across the prompt. Can be moved back.",
       inputSchema: {
         item_id: z.string().min(1).describe("Item id to move/rename (from list_drive_items)."),
         new_parent_id: z.string().optional().describe("Destination folder item id (to move it)."),
         new_name: z.string().optional().describe("New name (to rename it)."),
       },
     },
-    handler: async (args, { client, policy }) => {
+    handler: async (args, { client, policy, confirm }) => {
       const id = args.item_id as string;
+      const newParentId = args.new_parent_id as string | undefined;
+      const newName = args.new_name as string | undefined;
       const { dryRun } = policy.guard({ tool: "move_drive_item", capability: "write" });
       if (dryRun) return textResult(`[dry-run] Would move/rename item ${id}.`);
-      return jsonResult(
-        await client.moveDriveItem(id, {
-          newParentId: args.new_parent_id as string | undefined,
-          newName: args.new_name as string | undefined,
-        }),
-      );
+      const [item, from, toFolder] = await Promise.all([
+        client.driveItemContext(id),
+        client.driveItemPath(id),
+        newParentId ? client.driveItemPath(newParentId) : Promise.resolve(undefined),
+      ]);
+      const ok = await confirm.confirm({
+        action: newParentId ? "move OneDrive item" : "rename OneDrive item",
+        target: id,
+        details: {
+          ...driveItemDetails(item),
+          from,
+          "to folder": newParentId ? (toFolder ?? `${newParentId} (path unavailable)`) : undefined,
+          "new name": newName,
+        },
+        // id + eTag (metadata/rename/move; not content-only changes — see GraphClient.driveItemVersion).
+        probe: () => client.driveItemVersion(id),
+      });
+      if (!ok.approved) return textResult(`Move cancelled — ${ok.reason}.`);
+      return jsonResult(await client.moveDriveItem(id, { newParentId, newName }));
     },
   },
 
