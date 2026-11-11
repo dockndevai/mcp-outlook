@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-11
+
+### Security
+- **Approval no longer fails open on timeout.** The human-approval prompt used the MCP SDK's default
+  60 s request timeout, and a timeout fell through to "approved" (the `OUTLOOK_ALLOW_SEND` /
+  `OUTLOOK_ALLOW_DELETE` gate had already passed). A prompt nobody answered therefore auto-approved a send
+  or a delete. A timeout is now a refusal, and the wait defaults to 5 minutes.
+
+### Added
+- **Approvals are bound to the exact action.** The prompt shows the tool, the full (secret-redacted)
+  arguments and a fingerprint; every approval and refusal is written to the audit log as
+  `"audit":"approval"` with the fingerprint, resource version and `approvedBy` (`human` / `flag-only`).
+  The same per-call binding applies to laya-guard `confirm` prompts.
+- **Approvals are bound to the target's version.** `delete_message`, `delete_drive_item`, `cancel_event`,
+  `delete_event` and `update_event` read a version token before the prompt and again after the human
+  answers, and refuse if it changed (Graph `changeKey` for messages and events, `eTag` for OneDrive items).
+- `send_mail`, `reply_mail`, `forward_mail`, `create_event` and `respond_to_event` have no existing object to
+  version; they are bound to the fingerprint of the exact arguments. `send_mail` lists to/cc/bcc, subject and
+  body length in the prompt outside the (1500-character) arguments dump; `reply_mail`, `forward_mail`,
+  `update_event`, `respond_to_event`, `cancel_event` and the delete tools show the original message / event /
+  item they act on.
+- `OUTLOOK_REQUIRE_HUMAN_APPROVAL=true` — refuse these operations when the client cannot elicit.
+
+Tracking issue: https://github.com/dockndevai/mcp-core/issues/1
+
 ## [0.4.5] - 2026-11-09
 
 ### Changed

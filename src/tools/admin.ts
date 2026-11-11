@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDef } from "./types.js";
+import { driveItemDetails, eventDetails, messageDetails } from "./context.js";
 import { jsonResult, textResult } from "./types.js";
 
 /**
@@ -25,7 +26,14 @@ export const adminTools: ToolDef[] = [
       const id = args.id as string;
       const { dryRun } = policy.guard({ tool: "delete_message", capability: "admin", destructive: true });
       if (dryRun) return textResult(`[dry-run] Would delete message ${id} (to Deleted Items).`);
-      const ok = await confirm.confirm({ action: "delete message", target: id });
+      const orig = await client.messageContext(id);
+      const ok = await confirm.confirm({
+        action: "delete message",
+        target: id,
+        details: messageDetails("message", orig),
+        // id + changeKey: a message modified (even marked read) or replaced while the human decided is refused.
+        probe: () => client.messageVersion(id),
+      });
       if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
       await client.deleteMessage(id);
       return jsonResult({ deleted: id, note: "Moved to Deleted Items (recoverable)." });
@@ -46,7 +54,14 @@ export const adminTools: ToolDef[] = [
       const id = args.item_id as string;
       const { dryRun } = policy.guard({ tool: "delete_drive_item", capability: "admin", destructive: true });
       if (dryRun) return textResult(`[dry-run] Would delete OneDrive item ${id} (to recycle bin).`);
-      const ok = await confirm.confirm({ action: "delete OneDrive item", target: id });
+      const item = await client.driveItemContext(id);
+      const ok = await confirm.confirm({
+        action: "delete OneDrive item",
+        target: id,
+        details: driveItemDetails(item),
+        // id + eTag (metadata/rename/move; not content-only changes — see GraphClient.driveItemVersion).
+        probe: () => client.driveItemVersion(id),
+      });
       if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
       await client.deleteDriveItem(id);
       return jsonResult({ deleted: id, note: "Moved to the OneDrive recycle bin (recoverable)." });
@@ -73,7 +88,13 @@ export const adminTools: ToolDef[] = [
       const id = args.id as string;
       const { dryRun } = policy.guard({ tool: "cancel_event", capability: "admin", destructive: true });
       if (dryRun) return textResult(`[dry-run] Would cancel meeting ${id} and notify attendees.`);
-      const ok = await confirm.confirm({ action: "cancel meeting", target: id });
+      const current = await client.eventContext(id);
+      const ok = await confirm.confirm({
+        action: "cancel meeting",
+        target: id,
+        details: { ...eventDetails(current), "cancellation note": (args.comment as string | undefined) || undefined },
+        probe: () => client.eventVersion(id),
+      });
       if (!ok.approved) return textResult(`Cancellation stopped — ${ok.reason}.`);
       await client.cancelEvent(id, (args.comment as string | undefined) ?? "");
       return jsonResult({ cancelled: id, note: "Cancellation sent to attendees." });
@@ -94,7 +115,13 @@ export const adminTools: ToolDef[] = [
       const id = args.id as string;
       const { dryRun } = policy.guard({ tool: "delete_event", capability: "admin", destructive: true });
       if (dryRun) return textResult(`[dry-run] Would delete event ${id}.`);
-      const ok = await confirm.confirm({ action: "delete calendar event", target: id });
+      const current = await client.eventContext(id);
+      const ok = await confirm.confirm({
+        action: "delete calendar event",
+        target: id,
+        details: eventDetails(current),
+        probe: () => client.eventVersion(id),
+      });
       if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
       await client.deleteEvent(id);
       return jsonResult({ deleted: id });

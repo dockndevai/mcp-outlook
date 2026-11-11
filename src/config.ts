@@ -130,6 +130,7 @@ export function loadConfig(): AppConfig {
       allowDelete: bool("OUTLOOK_ALLOW_DELETE", false),
       dryRun: bool("OUTLOOK_DRY_RUN", false),
       auditLog: bool("OUTLOOK_AUDIT_LOG", true),
+      requireHumanApproval: bool("OUTLOOK_REQUIRE_HUMAN_APPROVAL", false),
     },
   };
 }
