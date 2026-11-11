@@ -130,12 +130,12 @@ describe("send_mail approval (end to end)", () => {
   it("keeps the recipients visible even when the body is far longer than the display limit", async () => {
     vi.spyOn(GraphClient.prototype, "sendMail").mockResolvedValue();
     const { client, prompts } = await connect({});
-    await client.callTool({ name: "send_mail", arguments: { ...args, body: "x".repeat(5000) } });
+    await client.callTool({ name: "send_mail", arguments: { ...args, body: "x".repeat(20000) } });
     const p = prompts[0]!;
-    expect(p).toContain("… (+"); // the argument dump is truncated…
+    expect(p).toContain("not shown; covered by the fingerprint"); // an over-long prose body is summarised (the tool opts in)…
     expect(p).toContain("to: alice@contoso.com"); // …but the recipients are shown outside it
     expect(p).toContain("bcc: eve@evil.test");
-    expect(p).toContain("body length: 5000 chars");
+    expect(p).toContain("body length: 20000 chars");
   });
 
   it("different arguments give a different fingerprint", async () => {
