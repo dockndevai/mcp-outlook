@@ -87,6 +87,7 @@ export const writeTools: ToolDef[] = [
       // long body (the dump is cut at 1500 chars) can never push them out of what the human sees.
       const ok = await confirm.confirm({
         action: "send email",
+        summarizeLargeArgs: true, // prose body: recipients/destination are shown separately
         target: recipientList(to),
         details: {
           to: recipientList(to),
@@ -132,6 +133,7 @@ export const writeTools: ToolDef[] = [
       const orig = await client.messageContext(id);
       const ok = await confirm.confirm({
         action: replyAll ? "reply-all to message" : "reply to message",
+        summarizeLargeArgs: true, // prose body: recipients/destination are shown separately
         target: id,
         details: {
           ...messageDetails("original", orig),
@@ -167,6 +169,7 @@ export const writeTools: ToolDef[] = [
       const orig = await client.messageContext(id);
       const ok = await confirm.confirm({
         action: "forward message",
+        summarizeLargeArgs: true, // prose body: recipients/destination are shown separately
         target: recipientList(to),
         details: { message: id, ...messageDetails("original", orig), "comment length": `${((args.comment as string | undefined) ?? "").length} chars` },
       });
@@ -323,6 +326,7 @@ export const writeTools: ToolDef[] = [
       // Invitations go out on create: bound to the fingerprint of these exact arguments (no existing object).
       const ok = await confirm.confirm({
         action: "create calendar event",
+        summarizeLargeArgs: true, // prose body: recipients/destination are shown separately
         target: subject,
         details: { when: `${args.start} – ${args.end}`, attendees: attendees.join(", ") || undefined },
       });
