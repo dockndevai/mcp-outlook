@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Recipient } from "../graph/client.js";
 import type { ToolDef } from "./types.js";
+import { eventDetails, messageDetails } from "./context.js";
 import { jsonResult, textResult } from "./types.js";
 
 /**
@@ -81,10 +82,19 @@ export const writeTools: ToolDef[] = [
       const to = toRecipients(args.to);
       const { dryRun } = policy.guard({ tool: "send_mail", capability: "write", requiresSend: true });
       if (dryRun) return textResult(`[dry-run] Would send "${args.subject as string}" to ${recipientList(to)}.`);
+      // A send has no existing object to version: the approval is bound to the fingerprint of these exact
+      // arguments (recipients, subject, body). The recipient lines below sit outside the arguments dump so a
+      // long body (the dump is cut at 1500 chars) can never push them out of what the human sees.
       const ok = await confirm.confirm({
         action: "send email",
         target: recipientList(to),
-        details: { subject: args.subject as string, cc: recipientList(toRecipients(args.cc)) || undefined },
+        details: {
+          to: recipientList(to),
+          cc: recipientList(toRecipients(args.cc)) || undefined,
+          bcc: recipientList(toRecipients(args.bcc)) || undefined,
+          subject: args.subject as string,
+          "body length": `${(args.body as string).length} chars`,
+        },
       });
       if (!ok.approved) return textResult(`Send cancelled — ${ok.reason}.`);
       await client.sendMail({
@@ -118,7 +128,17 @@ export const writeTools: ToolDef[] = [
       const replyAll = Boolean(args.reply_all);
       const { dryRun } = policy.guard({ tool: "reply_mail", capability: "write", requiresSend: true });
       if (dryRun) return textResult(`[dry-run] Would ${replyAll ? "reply-all" : "reply"} to message ${id}.`);
-      const ok = await confirm.confirm({ action: replyAll ? "reply-all to message" : "reply to message", target: id });
+      // The recipients of a reply come from the original message, so show it. Binding is the args fingerprint.
+      const orig = await client.messageContext(id);
+      const ok = await confirm.confirm({
+        action: replyAll ? "reply-all to message" : "reply to message",
+        target: id,
+        details: {
+          ...messageDetails("original", orig),
+          "reply recipients (from the original message)": replyAll ? [orig?.from, ...(orig?.to ?? []), ...(orig?.cc ?? [])].filter(Boolean).join(", ") || undefined : orig?.from,
+          "comment length": `${(args.comment as string).length} chars`,
+        },
+      });
       if (!ok.approved) return textResult(`Reply cancelled — ${ok.reason}.`);
       await client.replyMessage(id, args.comment as string, replyAll);
       return textResult(`${replyAll ? "Replied to all" : "Replied"} on message ${id}.`);
@@ -144,7 +164,12 @@ export const writeTools: ToolDef[] = [
       const to = toRecipients(args.to);
       const { dryRun } = policy.guard({ tool: "forward_mail", capability: "write", requiresSend: true });
       if (dryRun) return textResult(`[dry-run] Would forward message ${id} to ${recipientList(to)}.`);
-      const ok = await confirm.confirm({ action: "forward message", target: recipientList(to), details: { message: id } });
+      const orig = await client.messageContext(id);
+      const ok = await confirm.confirm({
+        action: "forward message",
+        target: recipientList(to),
+        details: { message: id, ...messageDetails("original", orig), "comment length": `${((args.comment as string | undefined) ?? "").length} chars` },
+      });
       if (!ok.approved) return textResult(`Forward cancelled — ${ok.reason}.`);
       await client.forwardMessage(id, to, (args.comment as string) ?? "");
       return textResult(`Forwarded message ${id} to ${recipientList(to)}.`);
@@ -295,6 +320,7 @@ export const writeTools: ToolDef[] = [
       const { dryRun } = policy.guard({ tool: "create_event", capability: "write", requiresSend: true });
       if (dryRun)
         return textResult(`[dry-run] Would create "${subject}" ${args.start}–${args.end}${attendees.length ? ` inviting ${attendees.join(", ")}` : ""}.`);
+      // Invitations go out on create: bound to the fingerprint of these exact arguments (no existing object).
       const ok = await confirm.confirm({
         action: "create calendar event",
         target: subject,
@@ -344,7 +370,14 @@ export const writeTools: ToolDef[] = [
       const id = args.id as string;
       const { dryRun } = policy.guard({ tool: "update_event", capability: "write", requiresSend: true });
       if (dryRun) return textResult(`[dry-run] Would update event ${id}.`);
-      const ok = await confirm.confirm({ action: "update calendar event", target: id });
+      const current = await client.eventContext(id);
+      const ok = await confirm.confirm({
+        action: "update calendar event",
+        target: id,
+        details: eventDetails(current),
+        // Pins the event's changeKey: if it was edited (or an attendee responded) while the human decided, refuse.
+        probe: () => client.eventVersion(id),
+      });
       if (!ok.approved) return textResult(`Update cancelled — ${ok.reason}.`);
       return jsonResult(
         await client.updateEvent(id, {
@@ -383,7 +416,9 @@ export const writeTools: ToolDef[] = [
       const graphResp = resp === "tentative" ? "tentativelyAccept" : resp;
       const { dryRun } = policy.guard({ tool: "respond_to_event", capability: "write", requiresSend: true });
       if (dryRun) return textResult(`[dry-run] Would ${resp} event ${id}.`);
-      const ok = await confirm.confirm({ action: `${resp} meeting invite`, target: id });
+      const current = await client.eventContext(id);
+      // A response is sent to the organizer: bound to the fingerprint of these exact arguments (no probe — nothing is changed on the event itself).
+      const ok = await confirm.confirm({ action: `${resp} meeting invite`, target: id, details: eventDetails(current) });
       if (!ok.approved) return textResult(`Response cancelled — ${ok.reason}.`);
       await client.respondToEvent(id, graphResp, (args.comment as string | undefined) ?? "", (args.send_response as boolean | undefined) ?? true);
       return textResult(`Responded "${resp}" to event ${id}.`);

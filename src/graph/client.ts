@@ -8,6 +8,7 @@
  * Attachment bytes (`contentBytes`) are large and often sensitive; `redactAttachment` strips them so
  * only metadata reaches the model. Fetch the raw bytes explicitly if ever needed.
  */
+import { createHash } from "node:crypto";
 import type { OutlookConnection } from "../config.js";
 import { createTokenProvider, type TokenProvider } from "./auth.js";
 
@@ -226,6 +227,29 @@ function buildEvent(ev: EventInput): Record<string, unknown> {
   return out;
 }
 
+/** Short, stable digest of an object id + its change marker, safe to show a human and to log. */
+export function versionToken(id: string, marker: string | undefined): string {
+  return createHash("sha256").update(`${id}|${marker ?? ""}`).digest("hex").slice(0, 12);
+}
+
+/** Context about a message, shown to the human at approval time (display only, not part of any version). */
+export interface MessageContext {
+  subject?: string;
+  from?: string;
+  to?: string[];
+  cc?: string[];
+  received?: string;
+}
+
+/** Context about a calendar event, shown to the human at approval time. */
+export interface EventContext {
+  subject?: string;
+  start?: string;
+  end?: string;
+  organizer?: string;
+  attendees?: string[];
+}
+
 export class GraphClient {
   private readonly base: string;
   private readonly userPath: string;
@@ -289,6 +313,96 @@ export class GraphClient {
 
   private mailbox(suffix: string): string {
     return `${this.userPath}${suffix}`;
+  }
+
+  /** GET that maps 404 to `undefined` (the object does not exist) and rethrows anything else. */
+  private async getOrUndefined<T>(path: string): Promise<T | undefined> {
+    try {
+      return await this.request<T>(path);
+    } catch (err) {
+      if (err instanceof GraphError && err.status === 404) return undefined;
+      throw err;
+    }
+  }
+
+  /**
+   * Version token for a mail message, pinned across an approval prompt: the message id plus Graph's
+   * `changeKey` (falling back to `@odata.etag`). `changeKey` changes whenever the message is modified,
+   * including read-state, so opening the message in another client while the prompt is open makes the
+   * approval fail closed (re-ask). If Graph returns neither marker the token only proves the id still exists.
+   * `undefined` when the message does not exist; transport errors throw.
+   */
+  async messageVersion(id: string): Promise<string | undefined> {
+    const m = await this.getOrUndefined<Record<string, unknown>>(
+      this.mailbox(`/messages/${encodeURIComponent(id)}?$select=id,changeKey`),
+    );
+    if (!m) return undefined;
+    return versionToken(String(m.id ?? id), (m.changeKey as string | undefined) ?? (m["@odata.etag"] as string | undefined));
+  }
+
+  /**
+   * Version token for a calendar event: id + `changeKey` (falling back to `@odata.etag`). It also moves
+   * when an attendee responds or the series is touched, so a busy meeting can fail closed spuriously;
+   * it never fails open. `undefined` when the event does not exist.
+   */
+  async eventVersion(id: string): Promise<string | undefined> {
+    const e = await this.getOrUndefined<Record<string, unknown>>(
+      this.mailbox(`/events/${encodeURIComponent(id)}?$select=id,changeKey`),
+    );
+    if (!e) return undefined;
+    return versionToken(String(e.id ?? id), (e.changeKey as string | undefined) ?? (e["@odata.etag"] as string | undefined));
+  }
+
+  /**
+   * Version token for a OneDrive item: id + `eTag` (metadata/name/parent changes; `cTag` is content-only
+   * and ignored). Whether adding children to a folder moves a folder's `eTag` is not verified against live
+   * Graph, so a folder whose contents changed while the prompt was open may not be detected.
+   * `undefined` when the item does not exist.
+   */
+  async driveItemVersion(id: string): Promise<string | undefined> {
+    const i = await this.getOrUndefined<Record<string, unknown>>(
+      this.mailbox(`/drive/items/${encodeURIComponent(id)}?$select=id,eTag`),
+    );
+    if (!i) return undefined;
+    return versionToken(String(i.id ?? id), (i.eTag as string | undefined) ?? (i["@odata.etag"] as string | undefined));
+  }
+
+  /** Best-effort display context for a message id (who/what the human is acting on). Never throws. */
+  async messageContext(id: string): Promise<MessageContext | undefined> {
+    try {
+      const q = new URLSearchParams({ $select: "subject,from,toRecipients,ccRecipients,receivedDateTime" });
+      const m = await this.getOrUndefined<GraphMessage & { ccRecipients?: GraphRecipient[] }>(
+        this.mailbox(`/messages/${encodeURIComponent(id)}?${q.toString()}`),
+      );
+      if (!m) return undefined;
+      const list = (rs?: GraphRecipient[]) => (rs ?? []).map(addr).filter((x): x is string => Boolean(x));
+      return { subject: m.subject, from: addr(m.from), to: list(m.toRecipients), cc: list(m.ccRecipients), received: m.receivedDateTime };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Best-effort display context for an event id. Never throws. */
+  async eventContext(id: string): Promise<EventContext | undefined> {
+    try {
+      const e = await this.getOrUndefined<GraphEvent>(
+        this.mailbox(`/events/${encodeURIComponent(id)}?$select=subject,start,end,organizer,attendees`),
+      );
+      if (!e) return undefined;
+      const s = summarizeEvent(e);
+      return { subject: s.subject, start: s.start, end: s.end, organizer: s.organizer, attendees: s.attendees };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Best-effort display context for a OneDrive item. Never throws. */
+  async driveItemContext(id: string): Promise<DriveItemRef | undefined> {
+    try {
+      return await this.getDriveItem({ id });
+    } catch {
+      return undefined;
+    }
   }
 
   // --- Identity ---
