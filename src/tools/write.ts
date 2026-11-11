@@ -223,6 +223,7 @@ export const writeTools: ToolDef[] = [
       const [orig, from, to] = await Promise.all([client.messageContext(id), client.messageFolderName(id), client.mailFolderName(destination)]);
       const ok = await confirm.confirm({
         action: "move message",
+        reversible: true,
         target: id,
         details: {
           ...messageDetails("message", orig),
@@ -327,6 +328,7 @@ export const writeTools: ToolDef[] = [
       ]);
       const ok = await confirm.confirm({
         action: newParentId ? "move OneDrive item" : "rename OneDrive item",
+        reversible: true,
         target: id,
         details: {
           ...driveItemDetails(item),
@@ -427,6 +429,7 @@ export const writeTools: ToolDef[] = [
       const current = await client.eventContext(id);
       const ok = await confirm.confirm({
         action: "update calendar event",
+        reversible: true,
         target: id,
         details: eventDetails(current),
         // Pins the event's changeKey: if it was edited (or an attendee responded) while the human decided, refuse.
