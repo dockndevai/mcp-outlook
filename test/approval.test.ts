@@ -477,6 +477,93 @@ describe("create_drive_folder stays unprompted (additive)", () => {
   });
 });
 
+describe("create_contact stays unprompted (additive, nothing notified)", () => {
+  it("creates the contact without an approval prompt", async () => {
+    const mk = vi.spyOn(GraphClient.prototype, "createContact").mockResolvedValue({ id: "C1" });
+    const { client, prompts } = await connect({ requireHuman: true });
+    const res = await client.callTool({ name: "create_contact", arguments: { display_name: "Alice", emails: ["alice@contoso.com"] } });
+    expect(res.isError).toBeFalsy();
+    expect(mk).toHaveBeenCalledWith({
+      displayName: "Alice",
+      emailAddresses: ["alice@contoso.com"],
+      companyName: undefined,
+      jobTitle: undefined,
+      mobilePhone: undefined,
+      businessPhones: undefined,
+      personalNotes: undefined,
+    });
+    expect(prompts).toHaveLength(0);
+  });
+
+  it("dry-run returns before any backend call", async () => {
+    const mk = vi.spyOn(GraphClient.prototype, "createContact").mockResolvedValue({ id: "C1" });
+    const { client } = await connect({ dryRun: true });
+    expect(text(await client.callTool({ name: "create_contact", arguments: { display_name: "Alice" } }))).toContain("[dry-run]");
+    expect(mk).not.toHaveBeenCalled();
+  });
+});
+
+describe("update_contact / delete_contact approval", () => {
+  it("update_contact shows the contact, binds to its version, and refuses when it changed while deciding", async () => {
+    vi.spyOn(GraphClient.prototype, "contactContext").mockResolvedValue({ displayName: "Alice", emailAddresses: ["alice@contoso.com"], companyName: "Acme" });
+    vi.spyOn(GraphClient.prototype, "contactVersion").mockImplementation(sequence("c1", "c2"));
+    const upd = vi.spyOn(GraphClient.prototype, "updateContact").mockResolvedValue({});
+    const { client, prompts } = await connect({});
+    const res = await client.callTool({ name: "update_contact", arguments: { id: "C1", company: "New Co" } });
+    expect(text(res)).toContain("resource changed since the prompt");
+    expect(upd).not.toHaveBeenCalled();
+    expect(prompts[0]).toContain("contact name: Alice");
+    expect(prompts[0]).toContain("contact company: Acme");
+  });
+
+  it("update_contact updates on a stable version", async () => {
+    vi.spyOn(GraphClient.prototype, "contactContext").mockResolvedValue({ displayName: "Alice" });
+    vi.spyOn(GraphClient.prototype, "contactVersion").mockResolvedValue("c1");
+    const upd = vi.spyOn(GraphClient.prototype, "updateContact").mockResolvedValue({ id: "C1" });
+    const { client } = await connect({});
+    const res = await client.callTool({ name: "update_contact", arguments: { id: "C1", company: "New Co" } });
+    expect(res.isError).toBeFalsy();
+    expect(upd).toHaveBeenCalledWith("C1", {
+      displayName: undefined,
+      emailAddresses: undefined,
+      companyName: "New Co",
+      jobTitle: undefined,
+      mobilePhone: undefined,
+      businessPhones: undefined,
+      personalNotes: undefined,
+    });
+  });
+
+  it("does NOT update when the human declines", async () => {
+    vi.spyOn(GraphClient.prototype, "contactContext").mockResolvedValue(undefined);
+    vi.spyOn(GraphClient.prototype, "contactVersion").mockResolvedValue("c1");
+    const upd = vi.spyOn(GraphClient.prototype, "updateContact").mockResolvedValue({});
+    const { client } = await connect({ answer: () => ({ action: "decline" }) });
+    expect(text(await client.callTool({ name: "update_contact", arguments: { id: "C1", company: "x" } }))).toContain("Update cancelled");
+    expect(upd).not.toHaveBeenCalled();
+  });
+
+  it("delete_contact refuses when the contact changed while deciding", async () => {
+    vi.spyOn(GraphClient.prototype, "contactContext").mockResolvedValue({ displayName: "Bob" });
+    vi.spyOn(GraphClient.prototype, "contactVersion").mockImplementation(sequence("v1", "v2"));
+    const del = vi.spyOn(GraphClient.prototype, "deleteContact").mockResolvedValue();
+    const { client } = await connect({});
+    const res = await client.callTool({ name: "delete_contact", arguments: { id: "C1" } });
+    expect(text(res)).toContain("resource changed since the prompt");
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("delete_contact deletes on a stable version", async () => {
+    vi.spyOn(GraphClient.prototype, "contactContext").mockResolvedValue({ displayName: "Bob" });
+    vi.spyOn(GraphClient.prototype, "contactVersion").mockResolvedValue("v1");
+    const del = vi.spyOn(GraphClient.prototype, "deleteContact").mockResolvedValue();
+    const { client } = await connect({});
+    const res = await client.callTool({ name: "delete_contact", arguments: { id: "C1" } });
+    expect(text(res)).toContain('"deleted": "C1"');
+    expect(del).toHaveBeenCalledWith("C1");
+  });
+});
+
 describe("Graph version probes", () => {
   const client = () => new GraphClient(config().connection);
   const reply = (status: number, body: unknown) => ({

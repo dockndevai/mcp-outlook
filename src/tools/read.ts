@@ -132,6 +132,20 @@ export const readTools: ToolDef[] = [
       return jsonResult(await client.listContacts(a.top as number | undefined));
     },
   },
+  {
+    name: "get_contact",
+    capability: "read",
+    config: {
+      title: "Get a contact",
+      description:
+        "Fetch one personal contact by id, with its full details (emails, company, job title, phone numbers, notes).",
+      inputSchema: { id: z.string().min(1).describe("Contact id (from list_contacts).") },
+    },
+    handler: async (a, { client, policy }) => {
+      policy.guard({ tool: "get_contact", capability: "read" });
+      return jsonResult(await client.getContact(a.id as string));
+    },
+  },
 
   // ===== OneDrive files =====
   {

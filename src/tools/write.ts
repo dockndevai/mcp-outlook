@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Recipient } from "../graph/client.js";
 import type { ToolDef } from "./types.js";
-import { driveItemDetails, eventDetails, messageDetails, uploadDetails } from "./context.js";
+import { contactDetails, driveItemDetails, eventDetails, messageDetails, uploadDetails } from "./context.js";
 import { jsonResult, textResult } from "./types.js";
 
 /**
@@ -235,6 +235,89 @@ export const writeTools: ToolDef[] = [
       });
       if (!ok.approved) return textResult(`Move cancelled — ${ok.reason}.`);
       return jsonResult(await client.moveMessage(id, destination));
+    },
+  },
+
+  // ===== Contacts =====
+  {
+    name: "create_contact",
+    capability: "write",
+    config: {
+      title: "Create a contact",
+      description:
+        "Create a personal contact in the mailbox. Additive and local to the mailbox — nothing is sent or notified — " +
+        "so it runs without a confirmation prompt, same as create_draft and create_drive_folder.",
+      inputSchema: {
+        display_name: z.string().min(1).describe("Contact's display name."),
+        emails: z.array(z.string()).optional().describe("Email addresses."),
+        company: z.string().optional().describe("Company name."),
+        job_title: z.string().optional().describe("Job title."),
+        mobile_phone: z.string().optional().describe("Mobile phone number."),
+        business_phones: z.array(z.string()).optional().describe("Business phone numbers."),
+        notes: z.string().optional().describe("Free-text personal notes."),
+      },
+    },
+    handler: async (args, { client, policy }) => {
+      const name = args.display_name as string;
+      const { dryRun } = policy.guard({ tool: "create_contact", capability: "write" });
+      if (dryRun) return textResult(`[dry-run] Would create contact "${name}".`);
+      return jsonResult(
+        await client.createContact({
+          displayName: name,
+          emailAddresses: args.emails as string[] | undefined,
+          companyName: args.company as string | undefined,
+          jobTitle: args.job_title as string | undefined,
+          mobilePhone: args.mobile_phone as string | undefined,
+          businessPhones: args.business_phones as string[] | undefined,
+          personalNotes: args.notes as string | undefined,
+        }),
+      );
+    },
+  },
+  {
+    name: "update_contact",
+    capability: "write",
+    config: {
+      title: "Update a contact",
+      description:
+        "Update fields of an existing personal contact. Only the fields you pass change. Prompts for human " +
+        "confirmation bound to the contact's current version (changed-while-deciding is refused).",
+      inputSchema: {
+        id: z.string().min(1).describe("Contact id (from list_contacts)."),
+        display_name: z.string().optional().describe("New display name."),
+        emails: z.array(z.string()).optional().describe("Replacement email address list."),
+        company: z.string().optional().describe("New company name."),
+        job_title: z.string().optional().describe("New job title."),
+        mobile_phone: z.string().optional().describe("New mobile phone number."),
+        business_phones: z.array(z.string()).optional().describe("Replacement business phone numbers."),
+        notes: z.string().optional().describe("Replacement personal notes."),
+      },
+    },
+    handler: async (args, { client, policy, confirm }) => {
+      const id = args.id as string;
+      const { dryRun } = policy.guard({ tool: "update_contact", capability: "write" });
+      if (dryRun) return textResult(`[dry-run] Would update contact ${id}.`);
+      const current = await client.contactContext(id);
+      const ok = await confirm.confirm({
+        action: "update contact",
+        reversible: true,
+        target: id,
+        details: contactDetails(current),
+        // id + changeKey: a contact edited elsewhere while the human decided is refused.
+        probe: () => client.contactVersion(id),
+      });
+      if (!ok.approved) return textResult(`Update cancelled — ${ok.reason}.`);
+      return jsonResult(
+        await client.updateContact(id, {
+          displayName: args.display_name as string | undefined,
+          emailAddresses: args.emails as string[] | undefined,
+          companyName: args.company as string | undefined,
+          jobTitle: args.job_title as string | undefined,
+          mobilePhone: args.mobile_phone as string | undefined,
+          businessPhones: args.business_phones as string[] | undefined,
+          personalNotes: args.notes as string | undefined,
+        }),
+      );
     },
   },
 

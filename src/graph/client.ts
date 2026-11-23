@@ -174,6 +174,29 @@ export interface EventInput {
   reminderMinutesBeforeStart?: number;
 }
 
+/** Fields a contact create/update accepts. `emailAddresses` replaces the whole list on update. */
+export interface ContactInput {
+  displayName?: string;
+  emailAddresses?: string[];
+  companyName?: string;
+  jobTitle?: string;
+  mobilePhone?: string;
+  businessPhones?: string[];
+  personalNotes?: string;
+}
+
+function buildContact(c: ContactInput): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (c.displayName !== undefined) out.displayName = c.displayName;
+  if (c.emailAddresses !== undefined) out.emailAddresses = c.emailAddresses.map((address) => ({ address }));
+  if (c.companyName !== undefined) out.companyName = c.companyName;
+  if (c.jobTitle !== undefined) out.jobTitle = c.jobTitle;
+  if (c.mobilePhone !== undefined) out.mobilePhone = c.mobilePhone;
+  if (c.businessPhones !== undefined) out.businessPhones = c.businessPhones;
+  if (c.personalNotes !== undefined) out.personalNotes = c.personalNotes;
+  return out;
+}
+
 type GraphDateTimeTz = { dateTime?: string; timeZone?: string };
 type GraphEvent = {
   id: string;
@@ -248,6 +271,13 @@ export interface EventContext {
   end?: string;
   organizer?: string;
   attendees?: string[];
+}
+
+/** Context about a contact, shown to the human at approval time. */
+export interface ContactContext {
+  displayName?: string;
+  emailAddresses?: string[];
+  companyName?: string;
 }
 
 export class GraphClient {
@@ -367,6 +397,18 @@ export class GraphClient {
     return versionToken(String(i.id ?? id), (i.eTag as string | undefined) ?? (i["@odata.etag"] as string | undefined));
   }
 
+  /**
+   * Version token for a contact: id + `changeKey` (falling back to `@odata.etag`). `undefined` when the
+   * contact does not exist.
+   */
+  async contactVersion(id: string): Promise<string | undefined> {
+    const c = await this.getOrUndefined<Record<string, unknown>>(
+      this.mailbox(`/contacts/${encodeURIComponent(id)}?$select=id,changeKey`),
+    );
+    if (!c) return undefined;
+    return versionToken(String(c.id ?? id), (c.changeKey as string | undefined) ?? (c["@odata.etag"] as string | undefined));
+  }
+
   /** Best-effort display context for a message id (who/what the human is acting on). Never throws. */
   async messageContext(id: string): Promise<MessageContext | undefined> {
     try {
@@ -391,6 +433,24 @@ export class GraphClient {
       if (!e) return undefined;
       const s = summarizeEvent(e);
       return { subject: s.subject, start: s.start, end: s.end, organizer: s.organizer, attendees: s.attendees };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Best-effort display context for a contact id. Never throws. */
+  async contactContext(id: string): Promise<ContactContext | undefined> {
+    try {
+      const c = await this.getOrUndefined<Record<string, unknown>>(
+        this.mailbox(`/contacts/${encodeURIComponent(id)}?$select=displayName,emailAddresses,companyName`),
+      );
+      if (!c) return undefined;
+      const emails = (c.emailAddresses as Array<{ address?: string }> | undefined) ?? [];
+      return {
+        displayName: c.displayName as string | undefined,
+        emailAddresses: emails.map((e) => e.address).filter((x): x is string => Boolean(x)),
+        companyName: c.companyName as string | undefined,
+      };
     } catch {
       return undefined;
     }
@@ -521,6 +581,31 @@ export class GraphClient {
       this.mailbox(`/contacts?$top=${n}&$select=id,displayName,emailAddresses,companyName`),
     );
     return data.value ?? [];
+  }
+
+  getContact(id: string): Promise<Record<string, unknown>> {
+    const q = "$select=id,displayName,emailAddresses,companyName,jobTitle,mobilePhone,businessPhones,personalNotes";
+    return this.request<Record<string, unknown>>(this.mailbox(`/contacts/${encodeURIComponent(id)}?${q}`));
+  }
+
+  // --- Contacts (writes) ---
+  createContact(c: ContactInput): Promise<Record<string, unknown>> {
+    // Additive and local to the mailbox: nothing is notified, so callers don't need a confirmation.
+    return this.request<Record<string, unknown>>(this.mailbox("/contacts"), {
+      method: "POST",
+      body: JSON.stringify(buildContact(c)),
+    });
+  }
+
+  updateContact(id: string, c: ContactInput): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(this.mailbox(`/contacts/${encodeURIComponent(id)}`), {
+      method: "PATCH",
+      body: JSON.stringify(buildContact(c)),
+    });
+  }
+
+  deleteContact(id: string): Promise<void> {
+    return this.request<void>(this.mailbox(`/contacts/${encodeURIComponent(id)}`), { method: "DELETE" });
   }
 
   // --- Writes ---
