@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-11-23
+
+### Maintenance
+- Bumped `vitest` (dev dependency) from 5.1.0 to 5.1.1 (patch, within the existing `^5.1.0` range).
+- `npm audit --audit-level=high` reports 0 high/critical advisories; two pre-existing moderate advisories
+  (`hono`, `@hono/node-server`) remain, nested under `@modelcontextprotocol/sdk` (already the latest version
+  satisfying its range), and will clear once the SDK bumps its own dependency.
+
 ## [0.5.0] - 2026-11-11
 
 ### Security
