@@ -4,7 +4,7 @@
 [![CI](https://github.com/dockndevai/mcp-outlook/actions/workflows/ci.yml/badge.svg)](https://github.com/dockndevai/mcp-outlook/actions/workflows/ci.yml)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
-A **safe-by-default** [Model Context Protocol](https://modelcontextprotocol.io) server for **Microsoft Outlook** mail, over [Microsoft Graph](https://learn.microsoft.com/graph/overview). It lets an agent read and operate a mailbox — list folders and messages, full-text **search**, read bodies and attachment metadata, list contacts, and (in higher modes) create drafts, **send / reply / forward**, mark read, move messages, and delete. It also manages **OneDrive files** — browse, search, download, upload, create folders, move/rename, and delete — and the **calendar** — list calendars and events, check free/busy, and (gated) create, update, respond to, cancel and delete events.
+A **safe-by-default** [Model Context Protocol](https://modelcontextprotocol.io) server for **Microsoft Outlook** mail, over [Microsoft Graph](https://learn.microsoft.com/graph/overview). It lets an agent read and operate a mailbox — list folders and messages, full-text **search**, read bodies and attachment metadata, list/get contacts, and (in higher modes) create drafts, **send / reply / forward**, mark read, move messages, create/update/delete contacts, and delete. It also manages **OneDrive files** — browse, search, download, upload, create folders, move/rename, and delete — and the **calendar** — list calendars and events, check free/busy, and (gated) create, update, respond to, cancel and delete events.
 
 **Browser sign-in:** on first run it opens your browser to the Microsoft sign-in page, then caches the token and refreshes it silently — the server never sees your password.
 
@@ -22,13 +22,16 @@ The server starts **read-only** (see [Safe by default](#safe-by-default)); highe
 | `search_messages` | full-text search across the mailbox | read-only |
 | `get_message` | one message with full body + recipients | read-only |
 | `list_attachments` | attachment metadata (bytes not returned) | read-only |
-| `list_contacts` | personal contacts | read-only |
+| `list_contacts` / `get_contact` | personal contacts (list, or one with full details) | read-only |
 | `create_draft` | prepare a draft without sending | read-write |
 | `send_mail` | compose & send a new email | read-write + `OUTLOOK_ALLOW_SEND` |
 | `reply_mail` / `forward_mail` | reply (all) / forward a message | read-write + `OUTLOOK_ALLOW_SEND` |
 | `mark_read` | mark read / unread (reversible) | read-write |
 | `move_message` | move to another folder (asks a human first) | read-write |
 | `delete_message` | delete (to Deleted Items) | admin + `OUTLOOK_ALLOW_DELETE` |
+| `create_contact` | create a personal contact (additive, no prompt) | read-write |
+| `update_contact` | update a contact's fields (asks a human first) | read-write |
+| `delete_contact` | delete a personal contact | admin + `OUTLOOK_ALLOW_DELETE` |
 | `list_drive_items` / `get_drive_item` | browse OneDrive files & folders | read-only |
 | `search_drive_files` | search OneDrive | read-only |
 | `download_drive_file` | read a OneDrive file's text | read-only |
@@ -91,11 +94,11 @@ Auth mode is chosen automatically (override with `OUTLOOK_AUTH`):
 
 The access model is enforced by [`src/security.ts`](src/security.ts) — defence in depth on top of the Graph token's own scopes/roles:
 
-- **`OUTLOOK_MODE`** — `read-only` (default) → `read-write` → `admin`. A tool is registered only if the mode allows its capability. Read-only exposes the 7 read tools; drafts/moves need `read-write`; deletes need `admin`.
+- **`OUTLOOK_MODE`** — `read-only` (default) → `read-write` → `admin`. A tool is registered only if the mode allows its capability. Read-only exposes the 8 read tools; drafts/moves need `read-write`; deletes need `admin`.
 - **`OUTLOOK_ALLOW_SEND`** — sending mail (send / reply / forward) can't be undone, so on top of `read-write` it also requires this flag. Drafting is always allowed in read-write; nothing leaves the mailbox until sent.
 - **`OUTLOOK_ALLOW_DELETE`** — deletes require this flag on top of `admin` mode.
 - **`OUTLOOK_FOLDER_ALLOWLIST` / `OUTLOOK_PROTECTED_FOLDERS`** — confine which folders can be written to / moved into; mark folders (e.g. `sentitems`, `archive`) that may be read but never modified.
-- **Interactive confirmation** — when the client supports MCP elicitation, sending mail (`send_mail` / `reply_mail` / `forward_mail`), calendar invitations/changes/responses (`create_event` / `update_event` / `respond_to_event`), `cancel_event`, the delete tools (`delete_message` / `delete_drive_item` / `delete_event`) and the writes that change an existing object (`upload_drive_file`, `move_message`, `move_drive_item`) pause and ask the **human** to approve before running. The prompt shows the tool, the exact (secret-redacted) arguments and a fingerprint of them; for sends the recipients (to/cc/bcc) and subject are listed separately so they stay visible when a long body is truncated in the arguments dump (the dump is cut at 1500 characters). `upload_drive_file` shows the path, whether it overwrites an existing file (with its size) or creates a new one, and the byte length; the moves show the item and where it goes from and to. For existing objects (`delete_message`, `delete_drive_item`, `cancel_event`, `delete_event`, `update_event`, `move_message`, `move_drive_item`, and the file at an `upload_drive_file` path — or its absence) the target's version (Graph `changeKey` for messages and events, `eTag` for OneDrive items) is pinned across the prompt and the action is refused if it changed. A prompt nobody answers is a refusal. Clients that can't elicit fall back to the `OUTLOOK_ALLOW_SEND` / `OUTLOOK_ALLOW_DELETE` gates.
+- **Interactive confirmation** — when the client supports MCP elicitation, sending mail (`send_mail` / `reply_mail` / `forward_mail`), calendar invitations/changes/responses (`create_event` / `update_event` / `respond_to_event`), `cancel_event`, the delete tools (`delete_message` / `delete_drive_item` / `delete_event` / `delete_contact`) and the writes that change an existing object (`upload_drive_file`, `move_message`, `move_drive_item`, `update_contact`) pause and ask the **human** to approve before running. The prompt shows the tool, the exact (secret-redacted) arguments and a fingerprint of them; for sends the recipients (to/cc/bcc) and subject are listed separately so they stay visible when a long body is truncated in the arguments dump (the dump is cut at 1500 characters). `upload_drive_file` shows the path, whether it overwrites an existing file (with its size) or creates a new one, and the byte length; the moves show the item and where it goes from and to. For existing objects (`delete_message`, `delete_drive_item`, `cancel_event`, `delete_event`, `update_event`, `move_message`, `move_drive_item`, `update_contact`, `delete_contact`, and the file at an `upload_drive_file` path — or its absence) the target's version (Graph `changeKey` for messages, events and contacts, `eTag` for OneDrive items) is pinned across the prompt and the action is refused if it changed. A prompt nobody answers is a refusal. Clients that can't elicit fall back to the `OUTLOOK_ALLOW_SEND` / `OUTLOOK_ALLOW_DELETE` gates. `create_contact` is purely additive and local to the mailbox (nothing is sent or notified), so — like `create_draft` and `create_drive_folder` — it runs unprompted in `read-write` mode.
 - **`OUTLOOK_REQUIRE_HUMAN_APPROVAL`** — when `true` (default `false`), the operations above are **refused** if the client cannot elicit, instead of falling back to the `OUTLOOK_ALLOW_*` gates alone.
 - **`OUTLOOK_DRY_RUN`** — validate and log writes without executing them.
 - **`OUTLOOK_AUDIT_LOG`** — a JSON audit line per guarded operation, on stderr (default on).

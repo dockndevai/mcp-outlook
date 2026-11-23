@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDef } from "./types.js";
-import { driveItemDetails, eventDetails, messageDetails } from "./context.js";
+import { contactDetails, driveItemDetails, eventDetails, messageDetails } from "./context.js";
 import { jsonResult, textResult } from "./types.js";
 
 /**
@@ -65,6 +65,34 @@ export const adminTools: ToolDef[] = [
       if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
       await client.deleteDriveItem(id);
       return jsonResult({ deleted: id, note: "Moved to the OneDrive recycle bin (recoverable)." });
+    },
+  },
+
+  {
+    name: "delete_contact",
+    capability: "admin",
+    destructive: true,
+    config: {
+      title: "Delete a contact",
+      description:
+        "Delete a personal contact by id. Requires admin mode and OUTLOOK_ALLOW_DELETE=true, and prompts for human " +
+        "confirmation bound to the contact's current version.",
+      inputSchema: { id: z.string().min(1).describe("Contact id (from list_contacts).") },
+    },
+    handler: async (args, { client, policy, confirm }) => {
+      const id = args.id as string;
+      const { dryRun } = policy.guard({ tool: "delete_contact", capability: "admin", destructive: true });
+      if (dryRun) return textResult(`[dry-run] Would delete contact ${id}.`);
+      const current = await client.contactContext(id);
+      const ok = await confirm.confirm({
+        action: "delete contact",
+        target: id,
+        details: contactDetails(current),
+        probe: () => client.contactVersion(id),
+      });
+      if (!ok.approved) return textResult(`Deletion cancelled — ${ok.reason}.`);
+      await client.deleteContact(id);
+      return jsonResult({ deleted: id });
     },
   },
 

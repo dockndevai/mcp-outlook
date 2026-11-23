@@ -1,4 +1,4 @@
-import type { DriveItemRef, EventContext, MessageContext } from "../graph/client.js";
+import type { ContactContext, DriveItemRef, EventContext, MessageContext } from "../graph/client.js";
 
 /**
  * Extra lines for the human approval prompt describing the object an id points at. Display only: the
@@ -26,6 +26,15 @@ export function eventDetails(e: EventContext | undefined): Details {
     "event when": e.start ? `${e.start} – ${e.end ?? "?"}` : undefined,
     "event organizer": e.organizer,
     "event attendees": join(e.attendees),
+  };
+}
+
+export function contactDetails(c: ContactContext | undefined): Details {
+  if (!c) return { contact: "unavailable" };
+  return {
+    "contact name": c.displayName,
+    "contact email": join(c.emailAddresses),
+    "contact company": c.companyName,
   };
 }
 
